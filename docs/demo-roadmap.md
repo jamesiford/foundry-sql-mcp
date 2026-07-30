@@ -13,7 +13,7 @@
 | M2 synthetic SQL data contract | Complete and live-validated |
 | M3 SQL authorization | Complete and live-validated |
 | M4 SQL MCP Server | Complete and live-validated |
-| M5 SQL MCP prompt agent | Version 1 registered and smoke-tested |
+| M5 SQL MCP prompt agent | Version 2 registered and smoke-tested |
 | M6 demonstration package | Complete and ready for Playground use |
 
 Validation selected East US 2, confirmed 2,580K TPM of available `gpt-5.4-mini` GlobalStandard quota, produced a create-only azd preview, and produced an ARM what-if with 13 creates and no updates or deletes.

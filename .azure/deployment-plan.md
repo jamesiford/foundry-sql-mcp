@@ -95,7 +95,7 @@ East US 2 was selected for Foundry and Container Apps because the subscription h
 - Foundry public network access is enabled and local/key authentication is disabled.
 - MCP UAMI has only `AcrPull` in Azure.
 - Entra app `foundry-sql-mcp-demo-api`, audience `api://ab2bfe51-53cb-4387-b90f-3dc2990371dd`, and `Mcp.Invoke` assignment to the project identity succeeded.
-- Pinned DAB 2.0.9 image `sql-mcp:2.0.9-5a5da1f-4b2945a8` was built and pushed with digest `sha256:aca3dd88451cd4a08eafa57b680c4a2264c8936a37267de8bb5936f9ba256f17`.
+- Pinned DAB 2.0.9 image `sql-mcp:2.0.9-0d4a93e-4b2945a8` was built from the implementation commit and pushed with digest `sha256:61923e5183f2f46772ade50e2f2ea108852e1e81271cdf309e516bf9ac4b3af0`.
 - The SQL MI experiment was rolled back: partial `TransferDemo` removed, demo NSG rule removed, public endpoint disabled, and stop submitted.
 - Azure SQL Database is the approved replacement because it supports direct client-ID SID user creation without SQL MI Directory Readers.
 - Azure SQL Database `sqlsqlmcpdemog64t67` and Basic database `TransferDemo` are online in Central US.
@@ -103,7 +103,7 @@ East US 2 was selected for Foundry and Container Apps because the subscription h
 - Synthetic schema/data, four approved views, three approved procedures, `mcp_reader`, and the direct-SID MCP UAMI user were deployed successfully.
 - The RemoteTool connection explicitly enables project managed identity. Foundry requests tokens for `api://ab2bfe51-53cb-4387-b90f-3dc2990371dd`; the resulting v2 token uses the bare client ID as `aud` and contains `Mcp.Invoke`.
 - The MCP service principal requires app-role assignment. DAB authorizes both its MCP-selected `Mcp.Invoke` role and system `authenticated` role with identical read/execute-only permissions; generic execute and all write tools remain disabled.
-- Agent `transfer-agent-sql-mcp-demo:1` is registered. All three smoke prompts returned grounded transfer, risk, and advisor-pipeline data.
+- Agent `transfer-agent-sql-mcp-demo:2` is registered with mandatory custom-report tool routing. All three smoke prompts returned grounded transfer, risk, and advisor-pipeline data.
 
 ## Phase 1 Scope
 
