@@ -1,5 +1,8 @@
 # Microsoft Foundry agents with Azure SQL Managed Instance
 
+> [!NOTE]
+> On branch `demo/public-evaluation`, the active implementation is a disposable public **SQL MCP-only** demonstration. Foundry IQ is out of scope. See [the demo roadmap](docs/demo-roadmap.md) and [operator guide](docs/demo-guide.md). The secure private architecture remains on `main`.
+
 Portal-first reference implementation for connecting Microsoft Foundry agents to curated data in Azure SQL Managed Instance (SQL MI) through two controlled paths:
 
 1. **SQL MCP Server**, built on Data API builder, for deterministic lookups, filters, aggregates, status checks, and stored-procedure reports.

@@ -9,6 +9,8 @@ Build a secure, code-first Microsoft Foundry reference solution in phases. Two c
 
 ## Current phase
 
+On branch `demo/public-evaluation`, implement only the approved public SQL MCP demonstration in `docs/demo-roadmap.md`. Foundry IQ, Azure AI Search knowledge sources, knowledge bases, embedding models, and an IQ agent are out of scope. Public Foundry, MCP, ACR, monitoring, and the temporary SQL MI TCP `3342`/`AzureCloud` exception are demo-only and must not be merged into `main` as production defaults.
+
 Phase 1 is complete. Phase 2 infrastructure is implemented and partially deployed in `centralus` under azd environment `foundry-sql-mcp-dev-centralus`. The last validated deployment created SQL MI, networking, managed identities, monitoring, private Standard Agent Setup dependencies, the Foundry resource/project, `gpt-5.4-mini`, project connections, private endpoints, and the project capability host. SQL MI reached `Ready` and the capability host reached `Succeeded`. The internal Container Apps environment failed with regional `AKSCapacityHeavyUsage` and requires an idempotent retry. Do not describe Phase 2 as fully deployed until that retry and post-deployment checks pass.
 
 Phase 2 may provision the private Azure AI Search service required by Standard Agent Setup. Do not implement SQL schemas, synthetic data, database roles, Data API builder configuration, SQL MCP Server logic, prompt-agent registration, Azure SQL knowledge sources, Search indexers/retrieval indexes, or Foundry IQ knowledge bases until their designated phases. The private SQL MCP path is primary; the Foundry IQ data plane is deferred and opt-in.

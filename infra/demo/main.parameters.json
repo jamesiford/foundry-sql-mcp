@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME=foundry-sql-mcp-demo}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "deployerPrincipalId": {
+      "value": "${AZURE_DEPLOYER_OBJECT_ID}"
+    },
+    "modelDeploymentName": {
+      "value": "${AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-5.4-mini}"
+    },
+    "modelName": {
+      "value": "${AZURE_AI_MODEL_NAME=gpt-5.4-mini}"
+    },
+    "modelVersion": {
+      "value": "${AZURE_AI_MODEL_VERSION=2026-03-17}"
+    },
+    "modelSkuName": {
+      "value": "${AZURE_AI_MODEL_SKU=GlobalStandard}"
+    },
+    "modelCapacity": {
+      "value": "${AZURE_AI_MODEL_CAPACITY=10}"
+    },
+    "expirationDate": {
+      "value": "${DEMO_EXPIRATION_DATE}"
+    },
+    "mcpContainerImage": {
+      "value": "${MCP_CONTAINER_IMAGE=}"
+    },
+    "mcpAuthAudience": {
+      "value": "${MCP_AUTH_AUDIENCE=}"
+    },
+    "sqlManagedInstancePublicFqdn": {
+      "value": "${SQL_MI_PUBLIC_FQDN=}"
+    },
+    "sqlDatabaseName": {
+      "value": "${SQL_DATABASE_NAME=TransferDemo}"
+    }
+  }
+}

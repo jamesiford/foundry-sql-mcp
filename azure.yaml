@@ -4,5 +4,5 @@ metadata:
   template: foundry-sql-mcp@0.1.0
 infra:
   provider: bicep
-  path: infra
+  path: infra/demo
   module: main

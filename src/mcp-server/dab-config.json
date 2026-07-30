@@ -1,0 +1,359 @@
+{
+  "$schema": "https://github.com/Azure/data-api-builder/releases/download/v2.0.9/dab.draft.schema.json",
+  "data-source": {
+    "database-type": "mssql",
+    "connection-string": "@env('DATABASE_CONNECTION_STRING')",
+    "options": {
+      "set-session-context": false
+    }
+  },
+  "runtime": {
+    "rest": {
+      "enabled": true,
+      "path": "/api",
+      "request-body-strict": false
+    },
+    "graphql": {
+      "enabled": false,
+      "path": "/graphql",
+      "allow-introspection": true
+    },
+    "mcp": {
+      "enabled": true,
+      "path": "/mcp",
+      "dml-tools": {
+        "describe-entities": true,
+        "create-record": false,
+        "read-records": true,
+        "update-record": false,
+        "delete-record": false,
+        "execute-entity": false,
+        "aggregate-records": {
+          "enabled": true,
+          "query-timeout": 30
+        }
+      }
+    },
+    "host": {
+      "cors": {
+        "origins": [],
+        "allow-credentials": false
+      },
+      "authentication": {
+        "provider": "EntraID",
+        "jwt": {
+          "audience": "api://00000000-0000-0000-0000-000000000000",
+          "issuer": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3/v2.0"
+        }
+      },
+      "mode": "production"
+    }
+  },
+  "autoentities": {},
+  "entities": {
+    "TransferSummary": {
+      "description": "Read-only transfer status, client, account, advisor, amount, dates, priority, and age.",
+      "source": {
+        "object": "dbo.vw_transfer_summary",
+        "type": "view"
+      },
+      "fields": [
+        { "name": "TransferId", "description": "Stable numeric transfer identifier", "primary-key": true },
+        { "name": "TransferCode", "description": "Human-readable transfer identifier" },
+        { "name": "ClientCode", "description": "Exact synthetic client identifier" },
+        { "name": "ClientName", "description": "Synthetic client display name" },
+        { "name": "AdvisorCode", "description": "Exact advisor identifier" },
+        { "name": "AdvisorName", "description": "Advisor display name" },
+        { "name": "RequestedAmount", "description": "Requested transfer amount" },
+        { "name": "CurrentStatus", "description": "Current transfer status" },
+        { "name": "CurrentStage", "description": "Current operational stage" },
+        { "name": "Priority", "description": "Low, Medium, or High operational priority" },
+        { "name": "AgeDays", "description": "Calendar days since request or until completion" },
+        { "name": "DataUpdatedAt", "description": "UTC source freshness timestamp" }
+      ],
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "TransferSummary",
+          "plural": "TransferSummaries"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "read"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "dml-tools": true,
+        "custom-tool": false
+      }
+    },
+    "ClientAccountOverview": {
+      "description": "Read-only client, household, advisor, account type, custodian, value, and account status.",
+      "source": {
+        "object": "dbo.vw_client_account_overview",
+        "type": "view"
+      },
+      "fields": [
+        { "name": "AccountId", "description": "Stable numeric account identifier", "primary-key": true },
+        { "name": "AccountCode", "description": "Human-readable account identifier" },
+        { "name": "ClientCode", "description": "Exact synthetic client identifier" },
+        { "name": "ClientName", "description": "Synthetic client display name" },
+        { "name": "HouseholdName", "description": "Synthetic household display name" },
+        { "name": "AdvisorCode", "description": "Exact advisor identifier" },
+        { "name": "AdvisorName", "description": "Advisor display name" },
+        { "name": "AccountType", "description": "Account registration type" },
+        { "name": "MarketValue", "description": "Synthetic current market value" },
+        { "name": "AccountStatus", "description": "Current account status" },
+        { "name": "DataUpdatedAt", "description": "UTC source freshness timestamp" }
+      ],
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "ClientAccountOverview",
+          "plural": "ClientAccountOverviews"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "read"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "dml-tools": true,
+        "custom-tool": false
+      }
+    },
+    "TransferRiskDashboard": {
+      "description": "Read-only transfer risk alerts with severity, category, reason, status, client, and advisor.",
+      "source": {
+        "object": "dbo.vw_transfer_risk_dashboard",
+        "type": "view"
+      },
+      "fields": [
+        { "name": "RiskAlertId", "description": "Stable numeric risk alert identifier", "primary-key": true },
+        { "name": "AlertCode", "description": "Human-readable risk alert identifier" },
+        { "name": "TransferCode", "description": "Human-readable transfer identifier" },
+        { "name": "ClientCode", "description": "Exact synthetic client identifier" },
+        { "name": "AdvisorCode", "description": "Exact advisor identifier" },
+        { "name": "Severity", "description": "Low, Medium, or High alert severity" },
+        { "name": "Category", "description": "Risk classification" },
+        { "name": "Reason", "description": "Grounded reason for the alert" },
+        { "name": "AlertStatus", "description": "Open or Resolved" },
+        { "name": "DataUpdatedAt", "description": "UTC source freshness timestamp" }
+      ],
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "TransferRiskDashboard",
+          "plural": "TransferRiskDashboards"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "read"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "dml-tools": true,
+        "custom-tool": false
+      }
+    },
+    "AdvisorPipeline": {
+      "description": "Read-only advisor transfer pipeline with stage, priority, amount, dates, and age.",
+      "source": {
+        "object": "dbo.vw_advisor_pipeline",
+        "type": "view"
+      },
+      "fields": [
+        { "name": "TransferId", "description": "Stable numeric transfer identifier", "primary-key": true },
+        { "name": "TransferCode", "description": "Human-readable transfer identifier" },
+        { "name": "AdvisorCode", "description": "Exact advisor identifier" },
+        { "name": "AdvisorName", "description": "Advisor display name" },
+        { "name": "ClientCode", "description": "Exact synthetic client identifier" },
+        { "name": "ClientName", "description": "Synthetic client display name" },
+        { "name": "CurrentStatus", "description": "Current transfer status" },
+        { "name": "CurrentStage", "description": "Current operational stage" },
+        { "name": "Priority", "description": "Low, Medium, or High operational priority" },
+        { "name": "RequestedAmount", "description": "Requested transfer amount" },
+        { "name": "AgeDays", "description": "Calendar days since request or until completion" },
+        { "name": "DataUpdatedAt", "description": "UTC source freshness timestamp" }
+      ],
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "AdvisorPipeline",
+          "plural": "AdvisorPipelines"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "read"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "dml-tools": true,
+        "custom-tool": false
+      }
+    },
+    "GetTransferSummaryByClient": {
+      "description": "Return all transfer summaries for one exact client code such as CLIENT-001.",
+      "source": {
+        "object": "dbo.usp_GetTransferSummaryByClient",
+        "type": "stored-procedure",
+        "parameters": [
+          {
+            "name": "ClientCode",
+            "description": "Exact client code",
+            "required": true
+          }
+        ]
+      },
+      "graphql": {
+        "enabled": true,
+        "operation": "mutation",
+        "type": {
+          "singular": "GetTransferSummaryByClient",
+          "plural": "GetTransferSummaryByClients"
+        }
+      },
+      "rest": {
+        "enabled": true,
+        "methods": [
+          "post"
+        ]
+      },
+      "permissions": [
+        {
+          "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "execute"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "custom-tool": true,
+        "dml-tools": false
+      }
+    },
+    "GetOpenRiskAlerts": {
+      "description": "Return open risk alerts at or above Low, Medium, or High severity.",
+      "source": {
+        "object": "dbo.usp_GetOpenRiskAlerts",
+        "type": "stored-procedure",
+        "parameters": [
+          {
+            "name": "MinimumSeverity",
+            "description": "Minimum severity: Low, Medium, or High",
+            "required": false,
+            "default": "Low"
+          }
+        ]
+      },
+      "graphql": {
+        "enabled": true,
+        "operation": "mutation",
+        "type": {
+          "singular": "GetOpenRiskAlerts",
+          "plural": "GetOpenRiskAlerts"
+        }
+      },
+      "rest": {
+        "enabled": true,
+        "methods": [
+          "post"
+        ]
+      },
+      "permissions": [
+        {
+          "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "execute"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "custom-tool": true,
+        "dml-tools": false
+      }
+    },
+    "GetAdvisorPipeline": {
+      "description": "Return the transfer pipeline for one advisor code, or all advisors when omitted.",
+      "source": {
+        "object": "dbo.usp_GetAdvisorPipeline",
+        "type": "stored-procedure",
+        "parameters": [
+          {
+            "name": "AdvisorCode",
+            "description": "Optional exact advisor code",
+            "required": false
+          }
+        ]
+      },
+      "graphql": {
+        "enabled": true,
+        "operation": "mutation",
+        "type": {
+          "singular": "GetAdvisorPipeline",
+          "plural": "GetAdvisorPipelines"
+        }
+      },
+      "rest": {
+        "enabled": true,
+        "methods": [
+          "post"
+        ]
+      },
+      "permissions": [
+        {
+          "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "execute"
+            }
+          ]
+        }
+      ],
+      "mcp": {
+        "custom-tool": true,
+        "dml-tools": false
+      }
+    }
+  }
+}

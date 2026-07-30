@@ -11,6 +11,7 @@ The solution must provision infrastructure, seed synthetic data, configure least
 
 ## Current implementation direction
 
+- On `demo/public-evaluation`, follow `docs/demo-roadmap.md` and implement SQL MCP Server only. Do not add Foundry IQ, Search knowledge sources, knowledge bases, embedding models, or an IQ agent. Keep public demo infrastructure isolated from `main` and preserve the cleanup path.
 - Phase 2 IaC is implemented and partially deployed in `centralus`. SQL MI, Foundry, the project/model, private dependencies, private endpoints, and the project capability host succeeded. The internal Container Apps environment failed on regional `AKSCapacityHeavyUsage` and requires an idempotent retry before Phase 2 is complete.
 - Implement the private SQL MCP path first and complete it end to end.
 - Provision the private Azure AI Search service required by Standard Agent Setup, but defer the Azure SQL knowledge source, indexer, retrieval index, Foundry IQ knowledge base, and IQ agent behind an opt-in profile.
