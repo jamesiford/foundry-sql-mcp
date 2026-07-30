@@ -8,8 +8,23 @@
     "location": {
       "value": "${AZURE_LOCATION}"
     },
+    "sqlLocation": {
+      "value": "${AZURE_SQL_LOCATION=${AZURE_LOCATION}}"
+    },
     "deployerPrincipalId": {
       "value": "${AZURE_DEPLOYER_OBJECT_ID}"
+    },
+    "deployerPrincipalName": {
+      "value": "${AZURE_SQL_ADMIN_LOGIN}"
+    },
+    "tenantId": {
+      "value": "${AZURE_TENANT_ID}"
+    },
+    "developerClientIp": {
+      "value": "${DEMO_CLIENT_IP=}"
+    },
+    "developerAzureClientIp": {
+      "value": "${DEMO_AZURE_CLIENT_IP=}"
     },
     "modelDeploymentName": {
       "value": "${AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-5.4-mini}"
@@ -34,9 +49,6 @@
     },
     "mcpAuthAudience": {
       "value": "${MCP_AUTH_AUDIENCE=}"
-    },
-    "sqlManagedInstancePublicFqdn": {
-      "value": "${SQL_MI_PUBLIC_FQDN=}"
     },
     "sqlDatabaseName": {
       "value": "${SQL_DATABASE_NAME=TransferDemo}"

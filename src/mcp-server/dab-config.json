@@ -42,7 +42,7 @@
       "authentication": {
         "provider": "EntraID",
         "jwt": {
-          "audience": "api://00000000-0000-0000-0000-000000000000",
+          "audience": "00000000-0000-0000-0000-000000000000",
           "issuer": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3/v2.0"
         }
       },
@@ -84,6 +84,14 @@
       "permissions": [
         {
           "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "read"
+            }
+          ]
+        },
+        {
+          "role": "authenticated",
           "actions": [
             {
               "action": "read"
@@ -133,6 +141,14 @@
               "action": "read"
             }
           ]
+        },
+        {
+          "role": "authenticated",
+          "actions": [
+            {
+              "action": "read"
+            }
+          ]
         }
       ],
       "mcp": {
@@ -171,6 +187,14 @@
       "permissions": [
         {
           "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "read"
+            }
+          ]
+        },
+        {
+          "role": "authenticated",
           "actions": [
             {
               "action": "read"
@@ -221,6 +245,14 @@
               "action": "read"
             }
           ]
+        },
+        {
+          "role": "authenticated",
+          "actions": [
+            {
+              "action": "read"
+            }
+          ]
         }
       ],
       "mcp": {
@@ -258,6 +290,14 @@
       "permissions": [
         {
           "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "execute"
+            }
+          ]
+        },
+        {
+          "role": "authenticated",
           "actions": [
             {
               "action": "execute"
@@ -306,6 +346,14 @@
               "action": "execute"
             }
           ]
+        },
+        {
+          "role": "authenticated",
+          "actions": [
+            {
+              "action": "execute"
+            }
+          ]
         }
       ],
       "mcp": {
@@ -343,6 +391,14 @@
       "permissions": [
         {
           "role": "Mcp.Invoke",
+          "actions": [
+            {
+              "action": "execute"
+            }
+          ]
+        },
+        {
+          "role": "authenticated",
           "actions": [
             {
               "action": "execute"

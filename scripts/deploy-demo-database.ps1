@@ -7,33 +7,39 @@ param(
     [string]$McpIdentityName,
 
     [Parameter(Mandatory)]
-    [guid]$McpIdentityObjectId,
+    [guid]$McpIdentityClientId,
 
-    [string]$DatabaseName = 'TransferDemo'
+    [string]$DatabaseName = 'TransferDemo',
+
+    [switch]$CreateDatabase
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if (-not (Get-Command sqlcmd -ErrorAction SilentlyContinue)) {
-    throw 'sqlcmd is required. Install the Microsoft sqlcmd utility before deploying the demo database.'
+$sqlcmd = 'C:\Program Files\SqlCmd\sqlcmd.exe'
+if (-not (Test-Path $sqlcmd)) {
+    throw 'Modern sqlcmd is required. Install winget package Microsoft.Sqlcmd before deploying the demo database.'
 }
 
 $sqlRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/data/sql'
-$scripts = @(
-    '000_create_database.sql',
-    '001_schema.sql',
-    '002_seed.sql',
-    '003_contract.sql',
-    '004_security.sql'
+$migrations = @(
+    @{ Script = '001_schema.sql'; Database = $DatabaseName },
+    @{ Script = '002_seed.sql'; Database = $DatabaseName },
+    @{ Script = '003_contract.sql'; Database = $DatabaseName },
+    @{ Script = '004_security.sql'; Database = $DatabaseName }
 )
 
-foreach ($script in $scripts) {
-    $scriptPath = Join-Path $sqlRoot $script
-    Write-Host "Applying $script..."
-    & sqlcmd -S $Server -d master -G -b -I -i $scriptPath -v "DatabaseName=$DatabaseName" "McpIdentityName=$McpIdentityName" "McpIdentityObjectId=$McpIdentityObjectId"
+if ($CreateDatabase) {
+    $migrations = @(@{ Script = '000_create_database.sql'; Database = 'master' }) + $migrations
+}
+
+foreach ($migration in $migrations) {
+    $scriptPath = Join-Path $sqlRoot $migration.Script
+    Write-Host "Applying $($migration.Script)..."
+    & $sqlcmd -S $Server -d $migration.Database --authentication-method ActiveDirectoryAzCli -N true -b -I -i $scriptPath -v "DatabaseName=$DatabaseName" "McpIdentityName=$McpIdentityName" "McpIdentityClientId=$McpIdentityClientId"
     if ($LASTEXITCODE -ne 0) {
-        throw "Database deployment failed while applying $script."
+        throw "Database deployment failed while applying $($migration.Script)."
     }
 }
 

@@ -31,7 +31,7 @@ foreach ($file in Get-ChildItem $sqlRoot -Filter '*.sql' | Sort-Object Name) {
     $content = [regex]::Replace($content, '(?m)^:setvar.*\r?\n?', '')
     $content = $content.Replace('$(DatabaseName)', 'TransferDemo')
     $content = $content.Replace('$(McpIdentityName)', 'id-mcp-foundry-sql-mcp-demo')
-    $content = $content.Replace('$(McpIdentityObjectId)', '622b70e7-edfa-4a6c-98e5-91ca122eb622')
+    $content = $content.Replace('$(McpIdentityClientId)', '9e9b29a8-4f36-4f67-ba43-44a4fd505adf')
     $batches = [regex]::Split($content, '(?im)^\s*GO\s*(?:--.*)?$')
 
     for ($batchIndex = 0; $batchIndex -lt $batches.Count; $batchIndex++) {

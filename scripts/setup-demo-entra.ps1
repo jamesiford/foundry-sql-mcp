@@ -67,6 +67,15 @@ if (-not $resourceServicePrincipal) {
     $resourceServicePrincipal = az ad sp create --id $applicationId -o json | ConvertFrom-Json
 }
 
+if (-not $resourceServicePrincipal.appRoleAssignmentRequired) {
+    $servicePrincipalPatchPath = Join-Path $env:TEMP 'foundry-sql-mcp-demo-sp-patch.json'
+    Set-Content -LiteralPath $servicePrincipalPatchPath -Value '{"appRoleAssignmentRequired":true}' -Encoding utf8NoBOM
+    az rest --method patch --url "https://graph.microsoft.com/v1.0/servicePrincipals/$($resourceServicePrincipal.id)" --headers 'Content-Type=application/json' --body "@$servicePrincipalPatchPath" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to require MCP app-role assignments.'
+    }
+}
+
 $existingAssignments = @(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$ProjectPrincipalId/appRoleAssignments" --query 'value' -o json | ConvertFrom-Json)
 $assignment = $existingAssignments | Where-Object { $_.resourceId -eq $resourceServicePrincipal.id -and $_.appRoleId -eq $appRoleId }
 if (-not $assignment) {

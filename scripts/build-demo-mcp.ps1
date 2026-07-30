@@ -20,17 +20,18 @@ New-Item $buildRoot -ItemType Directory -Force | Out-Null
 Copy-Item (Join-Path $sourceRoot 'Dockerfile') $buildRoot
 Copy-Item (Join-Path $sourceRoot '.dockerignore') $buildRoot
 $config = Get-Content (Join-Path $sourceRoot 'dab-config.json') -Raw
-$config = $config.Replace('api://00000000-0000-0000-0000-000000000000', "api://$McpApplicationId")
+$config = $config.Replace('00000000-0000-0000-0000-000000000000', $McpApplicationId)
 $generatedConfig = Join-Path $buildRoot 'dab-config.json'
 Set-Content $generatedConfig $config -NoNewline
 
 $parsed = Get-Content $generatedConfig -Raw | ConvertFrom-Json
-if ($parsed.runtime.host.authentication.jwt.audience -ne "api://$McpApplicationId") {
+if ($parsed.runtime.host.authentication.jwt.audience -ne $McpApplicationId) {
     throw "Generated DAB audience doesn't match the MCP application ID."
 }
 
 $gitSuffix = git rev-parse --short HEAD
-$imageTag = "2.0.9-$gitSuffix"
+$configHash = (Get-FileHash $generatedConfig -Algorithm SHA256).Hash.Substring(0, 8).ToLowerInvariant()
+$imageTag = "2.0.9-$gitSuffix-$configHash"
 az acr build --registry $RegistryName --image "sql-mcp:$imageTag" $buildRoot
 if ($LASTEXITCODE -ne 0) {
     throw 'ACR build failed.'

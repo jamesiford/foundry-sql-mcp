@@ -1,12 +1,13 @@
 # SQL MCP Public Demo Guide
 
-This guide operates the `demo/public-evaluation` branch. It creates a disposable public Foundry Basic project and public SQL MCP Server while reusing the existing synthetic SQL MI. It does not deploy Foundry IQ or Azure AI Search.
+This guide operates the `demo/public-evaluation` branch. It creates a disposable public Foundry Basic project, Azure SQL Database, and public SQL MCP Server. It does not deploy Foundry IQ or Azure AI Search. See [SQL backend options](sql-backend-options.md) for customer SQL MI and on-premises SQL Server requirements.
 
 ## Safety boundary
 
 - Use synthetic data only.
-- Do not run these commands against a production SQL MI.
-- The SQL MI public endpoint and `AzureCloud` TCP `3342` NSG rule are temporary evaluation exceptions.
+- The demo SQL logical server uses `SecuredByPerimeter` on TCP `1433` and must contain synthetic data only.
+- An enforced Network Security Perimeter allows Azure-resource traffic from the demo subscription plus deployment-client source addresses; no VNet or private endpoint is deployed.
+- SQL authentication is disabled; access uses Entra and managed identity.
 - Keep Entra authentication, `Mcp.Invoke`, managed identity, `mcp_reader`, and read-only DAB tools enabled.
 - Run cleanup after the demonstration.
 
@@ -27,7 +28,8 @@ Use the region recorded in the validated deployment plan and choose an expiratio
 
 ```powershell
 ./scripts/setup-demo-environment.ps1 `
-  -Location <validated-region> `
+  -Location eastus2 `
+  -SqlLocation centralus `
   -ExpirationDate <yyyy-mm-dd>
 ```
 
@@ -49,7 +51,7 @@ azd provision --no-prompt
 $values = azd env get-values --output json | ConvertFrom-Json
 ```
 
-The first provision creates Foundry Basic, the model, ACR, the public Container Apps environment, UAMI, and monitoring. It does not create the SQL MCP Container App because no image is configured yet.
+The first provision creates Foundry Basic, the model, ACR, the public Container Apps environment, UAMI, monitoring, Azure SQL Database, and its enforced Network Security Perimeter. It does not create the SQL MCP Container App because no image is configured yet.
 
 ## 4. Configure MCP Entra authentication
 
@@ -60,7 +62,7 @@ The first provision creates Foundry Basic, the model, ACR, the public Container 
 $values = azd env get-values --output json | ConvertFrom-Json
 ```
 
-This creates a dedicated Entra app, exposes `api://<app-id>`, defines application role `Mcp.Invoke`, assigns it to the Foundry project identity, and stores only non-secret IDs/URIs in azd.
+This creates a dedicated Entra app, exposes `api://<app-id>`, defines application role `Mcp.Invoke`, requires app-role assignment on the resource service principal, assigns the role to the Foundry project identity, and stores only non-secret IDs/URIs in azd. The project connection uses the Application ID URI to request the token; DAB validates the resulting bare client-ID audience and tenant v2 issuer. DAB evaluates the call as its `authenticated` system role because Foundry doesn't send `X-MS-API-ROLE`; Entra app-role assignment is the caller allowlist.
 
 ## 5. Build the pinned DAB image
 
@@ -72,27 +74,24 @@ This creates a dedicated Entra app, exposes `api://<app-id>`, defines applicatio
 
 The generated build context is under ignored `.dab/`; the committed config retains a placeholder audience. The ACR image contains the real non-secret audience.
 
-## 6. Enable temporary SQL MI demo access
+## 6. Deploy schema, data, and SQL authorization
+
+Install the modern cross-platform sqlcmd client once if it isn't present:
 
 ```powershell
-./scripts/configure-demo-sqlmi.ps1
-$values = azd env get-values --output json | ConvertFrom-Json
+winget install --id Microsoft.Sqlcmd
 ```
-
-This starts SQL MI, enables its public endpoint, adds `AllowDemoMcpPublicTds` from `AzureCloud` to TCP `3342`, derives the public FQDN, and stores it in azd.
-
-## 7. Deploy schema, data, and SQL authorization
 
 ```powershell
 ./scripts/deploy-demo-database.ps1 `
-  -Server "$($values.SQL_MI_PUBLIC_FQDN),3342" `
+  -Server "$($values.AZURE_SQL_SERVER_FQDN),1433" `
   -McpIdentityName $values.AZURE_MCP_IDENTITY_NAME `
-  -McpIdentityObjectId $values.AZURE_MCP_IDENTITY_PRINCIPAL_ID
+  -McpIdentityClientId $values.AZURE_MCP_IDENTITY_CLIENT_ID
 ```
 
 The scripts are idempotent and create only synthetic data, approved views/procedures, `mcp_reader`, and the MCP UAMI contained user.
 
-## 8. Deploy SQL MCP Container App and project connection
+## 7. Deploy SQL MCP Container App and project connection
 
 ```powershell
 azd provision --no-prompt
@@ -112,7 +111,7 @@ az containerapp show `
 
 Anonymous and wrong-audience MCP calls must fail. Authenticated project-identity calls are validated when the agent invokes tools.
 
-## 9. Register and test the prompt agent
+## 8. Register and test the prompt agent
 
 ```powershell
 ./scripts/register-demo-agent.ps1
@@ -128,7 +127,7 @@ The agent is named `transfer-agent-sql-mcp-demo` and allowlists:
 - `get_open_risk_alerts`
 - `get_advisor_pipeline`
 
-## 10. Open Foundry Playground
+## 9. Open Foundry Playground
 
 1. Browse to [Microsoft Foundry](https://ai.azure.com/).
 2. Select project `project-foundry-sql-mcp-demo` or the actual project name from `AZURE_AI_PROJECT_NAME`.
@@ -152,10 +151,10 @@ Summarize the transfer pipeline for advisor ADV-MIL-01.
 
 The public demo project should open from the browser without VPN/private DNS. If the old private project is selected, it still returns `Public access is disabled`; switch to the new demo project.
 
-## 11. Cleanup
+## 10. Cleanup
 
 ```powershell
-./scripts/cleanup-demo.ps1 -ConfirmCleanup -DropDatabase
+./scripts/cleanup-demo.ps1 -ConfirmCleanup
 ```
 
-Cleanup deletes the demo RG, removes or drops the synthetic database, removes the temporary NSG rule, disables the SQL MI public endpoint, and stops SQL MI. It does not delete the existing private Foundry RG, VNet, private endpoints, or SQL MI.
+Cleanup deletes the demo RG, including its Azure SQL logical server/database, and removes the demo MCP Entra application. It does not modify the existing private Foundry/SQL MI resource group.

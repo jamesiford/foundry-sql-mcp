@@ -1,14 +1,14 @@
 :setvar DatabaseName "TransferDemo"
 :setvar McpIdentityName "REQUIRED"
-:setvar McpIdentityObjectId "REQUIRED"
+:setvar McpIdentityClientId "REQUIRED"
 
 USE [$(DatabaseName)];
 GO
 
 IF N'$(McpIdentityName)' = N'REQUIRED'
     THROW 50001, 'McpIdentityName sqlcmd variable is required.', 1;
-IF N'$(McpIdentityObjectId)' = N'REQUIRED'
-    THROW 50002, 'McpIdentityObjectId sqlcmd variable is required.', 1;
+IF N'$(McpIdentityClientId)' = N'REQUIRED'
+    THROW 50002, 'McpIdentityClientId sqlcmd variable is required.', 1;
 GO
 
 IF DATABASE_PRINCIPAL_ID(N'mcp_reader') IS NULL
@@ -26,7 +26,8 @@ GO
 
 IF DATABASE_PRINCIPAL_ID(N'$(McpIdentityName)') IS NULL
 BEGIN
-    DECLARE @createUserSql nvarchar(max) = N'CREATE USER ' + QUOTENAME(N'$(McpIdentityName)') + N' FROM EXTERNAL PROVIDER WITH OBJECT_ID = ''' + REPLACE(N'$(McpIdentityObjectId)', '''', '''''') + N''';';
+    DECLARE @identitySid varbinary(16) = CONVERT(varbinary(16), CONVERT(uniqueidentifier, N'$(McpIdentityClientId)'));
+    DECLARE @createUserSql nvarchar(max) = N'CREATE USER ' + QUOTENAME(N'$(McpIdentityName)') + N' WITH SID = ' + CONVERT(nvarchar(34), @identitySid, 1) + N', TYPE = E;';
     EXEC sys.sp_executesql @createUserSql;
 END;
 GO

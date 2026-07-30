@@ -1,7 +1,12 @@
 targetScope = 'resourceGroup'
 
 param location string
+param sqlLocation string
 param deployerPrincipalId string
+param deployerPrincipalName string
+param tenantId string
+param developerClientIp string
+param developerAzureClientIp string
 param accountName string
 param projectName string
 param modelDeploymentName string
@@ -12,19 +17,20 @@ param modelCapacity int
 param containerRegistryName string
 param containerAppsEnvironmentName string
 param mcpIdentityName string
+param sqlServerName string
+param sqlDatabaseName string
+param sqlNetworkSecurityPerimeterName string
 param logAnalyticsWorkspaceName string
 param applicationInsightsName string
 param mcpContainerAppName string
 param mcpContainerImage string
 param mcpAuthAudience string
-param sqlManagedInstancePublicFqdn string
-param sqlDatabaseName string
 param tags object
 
 var foundryUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '53ca6127-db72-4b80-b1b0-d745d6d5456d')
 var acrPullRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var deployMcpApp = !empty(mcpContainerImage)
-var databaseConnectionString = 'Server=tcp:${sqlManagedInstancePublicFqdn},3342;Initial Catalog=${sqlDatabaseName};Authentication=Active Directory Managed Identity;User Id=${mcpIdentity.properties.clientId};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'
+var databaseConnectionString = 'Server=tcp:${sqlServer.properties.fullyQualifiedDomainName},1433;Initial Catalog=${sqlDatabase.name};Authentication=Active Directory Managed Identity;User Id=${mcpIdentity.properties.clientId};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'
 var mcpFqdn = mcpApp.?properties.configuration.ingress.fqdn ?? ''
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -58,6 +64,100 @@ resource mcpIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-3
   name: mcpIdentityName
   location: location
   tags: tags
+}
+
+resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
+  name: sqlServerName
+  location: sqlLocation
+  tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    administrators: {
+      administratorType: 'ActiveDirectory'
+      azureADOnlyAuthentication: true
+      login: deployerPrincipalName
+      principalType: 'User'
+      sid: deployerPrincipalId
+      tenantId: tenantId
+    }
+    minimalTlsVersion: '1.2'
+    publicNetworkAccess: 'SecuredByPerimeter'
+    version: '12.0'
+  }
+}
+
+resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
+  parent: sqlServer
+  name: sqlDatabaseName
+  location: sqlLocation
+  tags: tags
+  sku: {
+    name: 'Basic'
+    tier: 'Basic'
+    capacity: 5
+  }
+  properties: {
+    maxSizeBytes: 2147483648
+  }
+}
+
+module sqlNetworkSecurityPerimeter 'br/public:avm/res/network/network-security-perimeter:0.1.4' = {
+  name: 'sql-network-security-perimeter'
+  params: {
+    name: sqlNetworkSecurityPerimeterName
+    location: sqlLocation
+    enableTelemetry: false
+    diagnosticSettings: [
+      {
+        name: 'nsp-access-logs'
+        workspaceResourceId: workspace.id
+        logCategoriesAndGroups: [
+          {
+            categoryGroup: 'allLogs'
+          }
+        ]
+      }
+    ]
+    profiles: [
+      {
+        name: 'sql-mcp-demo'
+        accessRules: [
+          {
+            name: 'allow-demo-clients'
+            direction: 'Inbound'
+            addressPrefixes: concat(
+              empty(developerClientIp) ? [] : [
+                '${developerClientIp}/32'
+              ],
+              empty(developerAzureClientIp) || developerAzureClientIp == developerClientIp ? [] : [
+                '${developerAzureClientIp}/32'
+              ]
+            )
+          }
+          {
+            name: 'allow-demo-subscription'
+            direction: 'Inbound'
+            subscriptions: [
+              {
+                id: subscription().id
+              }
+            ]
+          }
+        ]
+      }
+    ]
+    resourceAssociations: [
+      {
+        name: 'sql-demo-server'
+        profile: 'sql-mcp-demo'
+        privateLinkResource: sqlServer.id
+        accessMode: 'Enforced'
+      }
+    ]
+    tags: tags
+  }
 }
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -233,6 +333,7 @@ resource mcpConnection 'Microsoft.CognitiveServices/accounts/projects/connection
     category: 'RemoteTool'
     target: 'https://${mcpFqdn}/mcp'
     isSharedToAll: true
+    useWorkspaceManagedIdentity: true
     audience: mcpAuthAudience
     metadata: {
       ApiType: 'Azure'
@@ -270,6 +371,9 @@ output containerRegistryEndpoint string = registry.properties.loginServer
 output containerAppsEnvironmentName string = containerAppsEnvironment.name
 output mcpIdentityClientId string = mcpIdentity.properties.clientId
 output mcpIdentityPrincipalId string = mcpIdentity.properties.principalId
+output sqlServerName string = sqlServer.name
+output sqlServerFqdn string = sqlServer.properties.fullyQualifiedDomainName
+output sqlDatabaseName string = sqlDatabase.name
 output mcpEndpoint string = empty(mcpFqdn) ? '' : 'https://${mcpFqdn}/mcp'
 output mcpConnectionName string = deployMcpApp ? mcpConnection.name : ''
 output applicationInsightsConnectionString string = applicationInsights.properties.ConnectionString

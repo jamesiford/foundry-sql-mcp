@@ -2,7 +2,7 @@
 
 ## Status
 
-Demo Deployment In Progress - SQL MI Starting
+Demo Deployment Complete - Azure SQL MCP Validated
 
 ## Active Demo Profile
 
@@ -14,8 +14,8 @@ Source roadmap: `docs/demo-roadmap.md`.
 
 - Create a new public Foundry Basic account/project; do not open or mutate the existing private Foundry account.
 - Create new public ACR, Container Apps, and monitoring resources in `rg-foundry-sql-mcp-demo`.
-- Reuse the existing Central US SQL MI because SQL MI cannot be detached from its required VNet.
-- Start SQL MI and enable its public endpoint on TCP `3342` only for approved demo sources.
+- Create a disposable public Entra-only Azure SQL Database in the demo resource group.
+- Do not modify the existing Central US SQL MI.
 - Preserve Entra authentication, managed identities, synthetic-only data, named-object SQL grants, read-only DAB tools, and Foundry RBAC.
 - Implement only SQL MCP Server and its prompt agent; Foundry IQ is out of scope for this branch.
 - Treat all public endpoints as time-bounded evaluation exceptions and remove them during cleanup.
@@ -30,13 +30,14 @@ Source roadmap: `docs/demo-roadmap.md`.
 | Tenant ID | `16b3c013-d300-468d-ac64-7eda0820b6d3` |
 | azd environment | `foundry-sql-mcp-demo` |
 | Demo resource group | `rg-foundry-sql-mcp-demo` |
-| Demo location | `eastus2` |
+| Demo app location | `eastus2` |
+| Demo SQL location | `centralus` |
 | Demo branch | `demo/public-evaluation` |
-| Existing SQL MI | `rg-foundry-sql-mcp-dev-centralus/sqlmi-sqlmcp-d3q5zq` |
+| Demo SQL backend | Entra-only Azure SQL Database in `rg-foundry-sql-mcp-demo` |
 | Demo data | Synthetic only |
 | Demo posture | Public, Entra-authenticated, read-only, disposable |
 
-East US 2 was selected because the subscription has 2,580K TPM available for `gpt-5.4-mini` GlobalStandard and the prior private deployment encountered Container Apps capacity pressure in Central US. SQL MI remains in Central US, so cross-region public demo traffic is expected and must be included in latency observations.
+East US 2 was selected for Foundry and Container Apps because the subscription has 2,580K TPM available for `gpt-5.4-mini` GlobalStandard and the prior private deployment encountered Container Apps capacity pressure in Central US. Azure SQL Database uses Central US because this subscription rejects new SQL logical servers in East US 2.
 
 ### Approval and execution gates
 
@@ -45,7 +46,7 @@ East US 2 was selected because the subscription has 2,580K TPM available for `gp
 3. Generate the separate demo infrastructure, SQL, MCP, prompt-agent, and evaluation artifacts.
 4. Set plan status to `Ready for Validation`.
 5. Run azure-validate checks, including Bicep build, what-if, credential scan, and role review.
-6. Obtain deployment confirmation before creating resources or enabling the SQL MI public endpoint.
+6. Obtain deployment confirmation before creating resources.
 7. Deploy and validate the SQL MCP demonstration.
 
 ### Explicitly out of scope for the demo
@@ -65,23 +66,25 @@ East US 2 was selected because the subscription has 2,580K TPM available for `gp
 |---|---|
 | `scripts/test-demo.ps1` | Passed: Bicep, DAB schema/policy, SQL ScriptDom, Python syntax, and image pin |
 | Demo Bicep compile | Passed with zero diagnostics |
-| `azd provision --preview --no-prompt` | Passed; create-only preview for 8 top-level demo resources, no changes applied |
-| Subscription ARM what-if | Passed; 13 creates, no updates/deletes, no policy or validation errors |
-| DAB 2.0.9 schema | Passed; live SQL connectivity intentionally deferred until SQL MI listener is enabled |
+| `azd provision --preview --no-prompt` | Passed before deployment; subsequent provisions completed successfully and idempotently |
+| Subscription ARM what-if | Passed before deployment; management-group SQL public-access mutation was handled with policy-compatible NSP |
+| DAB 2.0.9 schema | Passed; live SQL connectivity validated after Azure SQL Database deployment |
 | SQL syntax | Passed for all 5 files with Microsoft ScriptDom |
 | PowerShell syntax | Passed for all scripts |
 | Python SDK model construction | Passed with `azure-ai-projects==2.4.0` and `openai>=2.8.0` |
 | Credential scan | Passed; no passwords, keys, tokens, or private keys |
 | Role review | MCP UAMI receives only `AcrPull` in Azure and `mcp_reader` in SQL; no broad runtime role |
-| Demo target | `rg-foundry-sql-mcp-demo` does not exist |
+| Container App | Healthy, one replica, `RunningAtMaxScale`; anonymous data access returns `403` |
+| Foundry agent smoke test | Passed all 3 deterministic prompts with grounded SQL results |
+| Demo target | `rg-foundry-sql-mcp-demo` deployed; expiration `2026-08-13` |
 
 ### Deployment sequence after approval
 
 1. Bootstrap the 13-resource public demo graph in East US 2.
 2. Create the MCP Entra app role and assign it to the project identity.
 3. Build the pinned DAB image in ACR.
-4. Start SQL MI, enable its public endpoint, and add the temporary `AzureCloud` TCP `3342` NSG rule.
-5. Deploy the synthetic database and `mcp_reader` authorization.
+4. Provision the Entra-only Azure SQL Database and enforced Network Security Perimeter.
+5. Deploy the synthetic schema/data and direct-SID `mcp_reader` authorization.
 6. Re-provision to create the SQL MCP Container App and Foundry RemoteTool connection.
 7. Register and smoke-test `transfer-agent-sql-mcp-demo`.
 8. Provide the public Foundry Playground URL and run the demonstration prompts.
@@ -92,8 +95,15 @@ East US 2 was selected because the subscription has 2,580K TPM available for `gp
 - Foundry public network access is enabled and local/key authentication is disabled.
 - MCP UAMI has only `AcrPull` in Azure.
 - Entra app `foundry-sql-mcp-demo-api`, audience `api://ab2bfe51-53cb-4387-b90f-3dc2990371dd`, and `Mcp.Invoke` assignment to the project identity succeeded.
-- Pinned DAB 2.0.9 image was built and pushed; it will be rebuilt after this implementation commit so its tag matches immutable source.
-- Existing SQL MI is in `Starting`; its public endpoint remains disabled and the demo NSG rule has not yet been created.
+- Pinned DAB 2.0.9 image `sql-mcp:2.0.9-5a5da1f-4b2945a8` was built and pushed with digest `sha256:aca3dd88451cd4a08eafa57b680c4a2264c8936a37267de8bb5936f9ba256f17`.
+- The SQL MI experiment was rolled back: partial `TransferDemo` removed, demo NSG rule removed, public endpoint disabled, and stop submitted.
+- Azure SQL Database is the approved replacement because it supports direct client-ID SID user creation without SQL MI Directory Readers.
+- Azure SQL Database `sqlsqlmcpdemog64t67` and Basic database `TransferDemo` are online in Central US.
+- Management-group policy `AzureSQL_PublicNetwork_Modify` requires ordinary SQL public access to remain disabled; the deployed server uses `SecuredByPerimeter` and an enforced NSP profile instead of firewall rules.
+- Synthetic schema/data, four approved views, three approved procedures, `mcp_reader`, and the direct-SID MCP UAMI user were deployed successfully.
+- The RemoteTool connection explicitly enables project managed identity. Foundry requests tokens for `api://ab2bfe51-53cb-4387-b90f-3dc2990371dd`; the resulting v2 token uses the bare client ID as `aud` and contains `Mcp.Invoke`.
+- The MCP service principal requires app-role assignment. DAB authorizes both its MCP-selected `Mcp.Invoke` role and system `authenticated` role with identical read/execute-only permissions; generic execute and all write tools remain disabled.
+- Agent `transfer-agent-sql-mcp-demo:1` is registered. All three smoke prompts returned grounded transfer, risk, and advisor-pipeline data.
 
 ## Phase 1 Scope
 

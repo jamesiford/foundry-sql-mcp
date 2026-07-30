@@ -36,14 +36,21 @@ if ($dabConfig.runtime.mcp.'dml-tools'.'create-record' -ne $false -or
     throw 'DAB write or generic execute tools are not disabled.'
 }
 foreach ($entity in $dabConfig.entities.PSObject.Properties) {
+    $permissionRoles = @($entity.Value.permissions.role)
+    if (@($permissionRoles | Where-Object { $_ -notin @('Mcp.Invoke', 'authenticated') }).Count -gt 0) {
+        throw "Entity $($entity.Name) grants an unexpected DAB role."
+    }
+    if ('Mcp.Invoke' -notin $permissionRoles -or 'authenticated' -notin $permissionRoles) {
+        throw "Entity $($entity.Name) must grant both MCP and authenticated DAB roles."
+    }
     foreach ($permission in $entity.Value.permissions) {
-        if ($permission.role -ne 'Mcp.Invoke') {
-            throw "Entity $($entity.Name) grants unexpected DAB role $($permission.role)."
+        if ($permission.actions.action -match 'create|update|delete') {
+            throw "Entity $($entity.Name) grants a write action."
         }
     }
 }
 
-$env:DATABASE_CONNECTION_STRING = 'Server=tcp:demo.invalid,3342;Initial Catalog=TransferDemo;Authentication=Active Directory Managed Identity;User Id=00000000-0000-0000-0000-000000000000;Encrypt=True;TrustServerCertificate=False;'
+$env:DATABASE_CONNECTION_STRING = 'Server=tcp:demo.invalid,1433;Initial Catalog=TransferDemo;Authentication=Active Directory Managed Identity;User Id=00000000-0000-0000-0000-000000000000;Encrypt=True;TrustServerCertificate=False;'
 $dabOutput = dab validate --config (Join-Path $repoRoot 'src/mcp-server/dab-config.json') 2>&1 | Out-String
 if ($dabOutput -notmatch 'The config satisfies the schema requirements' -or $dabOutput -match 'Total schema validation errors') {
     Write-Error $dabOutput

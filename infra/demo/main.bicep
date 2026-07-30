@@ -8,8 +8,23 @@ param environmentName string = 'foundry-sql-mcp-demo'
 @description('Azure region for disposable demo resources.')
 param location string
 
+@description('Azure region for the disposable demo SQL Database.')
+param sqlLocation string = location
+
 @description('Object ID of the human deployment principal.')
 param deployerPrincipalId string
+
+@description('Microsoft Entra user principal name used as Azure SQL administrator.')
+param deployerPrincipalName string
+
+@description('Microsoft Entra tenant ID.')
+param tenantId string
+
+@description('Optional public client IP allowed to deploy the demo SQL schema.')
+param developerClientIp string = ''
+
+@description('Optional Azure control-plane source IP used by corporate traffic routing.')
+param developerAzureClientIp string = ''
 
 @description('Demo resource group name.')
 param resourceGroupName string = 'rg-${environmentName}'
@@ -39,9 +54,6 @@ param mcpContainerImage string = ''
 @description('Entra Application ID URI expected by SQL MCP Server.')
 param mcpAuthAudience string = ''
 
-@description('Public SQL MI FQDN used by the demo on TCP 3342.')
-param sqlManagedInstancePublicFqdn string = ''
-
 @description('Synthetic SQL database name.')
 param sqlDatabaseName string = 'TransferDemo'
 
@@ -65,7 +77,12 @@ module resources 'modules/resources.bicep' = {
   scope: resourceGroup
   params: {
     location: location
+    sqlLocation: sqlLocation
     deployerPrincipalId: deployerPrincipalId
+    deployerPrincipalName: deployerPrincipalName
+    tenantId: tenantId
+    developerClientIp: developerClientIp
+    developerAzureClientIp: developerAzureClientIp
     accountName: 'fdrysqlmcpdemo${uniqueSuffix}'
     projectName: 'project-${environmentName}'
     modelDeploymentName: modelDeploymentName
@@ -76,13 +93,14 @@ module resources 'modules/resources.bicep' = {
     containerRegistryName: 'acrsqlmcpdemo${uniqueSuffix}'
     containerAppsEnvironmentName: 'cae-sql-mcp-demo-${uniqueSuffix}'
     mcpIdentityName: 'id-mcp-${environmentName}'
+    sqlServerName: 'sqlsqlmcpdemo${substring(uniqueString(subscription().id, environmentName, sqlLocation), 0, 6)}'
+    sqlDatabaseName: sqlDatabaseName
+    sqlNetworkSecurityPerimeterName: 'nsp-sql-mcp-demo-${uniqueSuffix}'
     logAnalyticsWorkspaceName: 'law-sql-mcp-demo-${uniqueSuffix}'
     applicationInsightsName: 'appi-sql-mcp-demo-${uniqueSuffix}'
     mcpContainerAppName: 'app-sql-mcp-demo-${uniqueSuffix}'
     mcpContainerImage: mcpContainerImage
     mcpAuthAudience: mcpAuthAudience
-    sqlManagedInstancePublicFqdn: sqlManagedInstancePublicFqdn
-    sqlDatabaseName: sqlDatabaseName
     tags: tags
   }
 }
@@ -100,6 +118,9 @@ output AZURE_CONTAINER_APPS_ENVIRONMENT_NAME string = resources.outputs.containe
 output AZURE_MCP_IDENTITY_CLIENT_ID string = resources.outputs.mcpIdentityClientId
 output AZURE_MCP_IDENTITY_PRINCIPAL_ID string = resources.outputs.mcpIdentityPrincipalId
 output AZURE_MCP_IDENTITY_NAME string = 'id-mcp-${environmentName}'
+output AZURE_SQL_SERVER_NAME string = resources.outputs.sqlServerName
+output AZURE_SQL_SERVER_FQDN string = resources.outputs.sqlServerFqdn
+output AZURE_SQL_DATABASE_NAME string = resources.outputs.sqlDatabaseName
 output MCP_ENDPOINT string = resources.outputs.mcpEndpoint
 output MCP_PROJECT_CONNECTION_NAME string = resources.outputs.mcpConnectionName
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = resources.outputs.applicationInsightsConnectionString

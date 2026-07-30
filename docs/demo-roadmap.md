@@ -2,27 +2,27 @@
 
 ## Status
 
-**Approved for implementation.** Code generation and local validation are in progress. Demo deployment and changes to the existing SQL MI require a separate confirmation after validation.
+**Complete and validated.** The disposable public SQL MCP demonstration is deployed and passes end-to-end Foundry agent smoke tests.
 
 ## Implementation Status
 
 | Milestone | Status |
 |---|---|
 | M0 approval and preflight | Complete |
-| M1 public demo infrastructure | Public bootstrap deployed successfully |
-| M2 synthetic SQL data contract | Implemented; live execution pending |
-| M3 SQL authorization | Implemented; live execution pending |
-| M4 SQL MCP Server | Implemented; initial pinned image built; Container App deployment pending SQL |
-| M5 SQL MCP prompt agent | Implemented and SDK-validated; registration pending |
-| M6 demonstration package | Implemented; live Playground proof pending |
+| M1 public demo infrastructure | Complete |
+| M2 synthetic SQL data contract | Complete and live-validated |
+| M3 SQL authorization | Complete and live-validated |
+| M4 SQL MCP Server | Complete and live-validated |
+| M5 SQL MCP prompt agent | Version 1 registered and smoke-tested |
+| M6 demonstration package | Complete and ready for Playground use |
 
 Validation selected East US 2, confirmed 2,580K TPM of available `gpt-5.4-mini` GlobalStandard quota, produced a create-only azd preview, and produced an ARM what-if with 13 creates and no updates or deletes.
 
-Live deployment created the public Foundry project/model, ACR, public Container Apps environment, UAMI, and monitoring. Entra `Mcp.Invoke` configuration succeeded. SQL MI startup is the active gate; the public listener and NSG exception remain disabled until startup completes.
+Live deployment created the public Foundry project/model, ACR, public Container Apps environment, UAMI, monitoring, Central US Azure SQL Database, enforced SQL Network Security Perimeter, DAB Container App, RemoteTool connection, and prompt agent. The attempted SQL MI demo path was rolled back because SQL MI requires Directory Readers to create a managed-identity database user. Azure SQL Database replaces it for this demo.
 
 ## Purpose
 
-Produce a working, non-production demonstration of `transfer-agent-sql-mcp-demo`, a Microsoft Foundry prompt agent that performs deterministic SQL MCP lookups, filters, aggregates, and reports over synthetic Azure SQL Managed Instance data.
+Produce a working, non-production demonstration of `transfer-agent-sql-mcp-demo`, a Microsoft Foundry prompt agent that performs deterministic SQL MCP lookups, filters, aggregates, and reports over synthetic Azure SQL Database data.
 
 This branch intentionally removes private networking from the Foundry and MCP paths so the agent can be created and tested from the public Microsoft Foundry portal Playground. It preserves Microsoft Entra authentication, managed identity, synthetic data, named-object SQL grants, and read-only tools.
 
@@ -45,8 +45,7 @@ Do not merge the demo's public-network defaults into `main`. Reusable schema, se
 Verified on July 30, 2026:
 
 - Existing resource group: `rg-foundry-sql-mcp-dev-centralus`.
-- SQL MI `sqlmi-sqlmcp-d3q5zq` exists in Central US with 4 vCores and is currently `Stopped`.
-- SQL MI public data endpoint is disabled.
+- The secure architecture has an existing Central US SQL MI, but the public demo no longer modifies or uses it.
 - Foundry account/project, `gpt-5.4-mini`, and project capability host succeeded.
 - Existing Foundry public network access is disabled, so public Playground access returns `403 Public access is disabled`.
 - Existing Container Apps environment is `Failed`.
@@ -61,13 +60,13 @@ flowchart LR
     PublicFoundry --> MCPAgent[SQL MCP prompt agent]
 
     MCPAgent -->|Entra-authenticated HTTPS| DAB[Public SQL MCP Server / DAB 2.x]
-    DAB -->|MCP UAMI + TLS 3342| SQLMI[(Existing SQL MI)]
+    DAB -->|MCP UAMI + TLS 1433| SQLDB[(Demo Azure SQL Database)]
 ```
 
 ### Deliberately retained controls
 
 - Microsoft Entra authentication for Foundry and SQL MCP.
-- Managed identity from SQL MCP Server to SQL MI.
+- Managed identity from SQL MCP Server to Azure SQL Database.
 - SQL Entra-only administration.
 - Synthetic data only.
 - `mcp_reader` named-object grants.
@@ -85,9 +84,9 @@ flowchart LR
 - MCP private endpoint/DNS.
 - Azure Monitor Private Link Scope for the demo resources.
 
-### Constraint that cannot be removed
+### Demo database decision
 
-Azure SQL Managed Instance requires its delegated VNet/subnet. The demo will reuse the existing SQL MI and enable its public data endpoint on TCP `3342`. A public Container Apps environment without VNet/NAT has outbound IPs that can change, so the evaluation profile allows the `AzureCloud` service tag to reach TCP `3342`. This is intentionally broad network reachability; Entra managed identity and named-object SQL grants remain the authorization boundary.
+Use a disposable Basic Azure SQL Database with Entra-only authentication and policy-compatible Network Security Perimeter access. Subscription policy forcibly disables ordinary SQL public networking, so the demo uses `SecuredByPerimeter` with an enforced profile instead of SQL firewall rules. Azure SQL Database supports creating the UAMI contained user directly from its client-ID SID and therefore doesn't require Directory Readers. The customer's SQL MI and on-premises requirements are documented separately in `docs/sql-backend-options.md`.
 
 ## Resource Strategy
 
@@ -97,15 +96,18 @@ Create new public demo resources rather than opening the existing private Foundr
 |---|---|---|
 | azd environment | `foundry-sql-mcp-demo` | Separate deployment state |
 | Resource group | `rg-foundry-sql-mcp-demo` | All disposable demo resources |
-| Region | `eastus2` | Avoids prior Central US ACA capacity issue; SQL MI remains in Central US |
+| App region | `eastus2` | Avoids prior Central US ACA capacity issue |
+| SQL region | `centralus` | East US 2 SQL provisioning is restricted for this subscription |
 | Foundry account/project | Deterministic demo suffix | Public Basic Setup; no capability host or VNet injection |
 | Chat model | `gpt-5.4-mini` | Pin tested version/SKU after quota validation |
 | Azure Container Registry | Demo suffix | Public network; MCP UAMI gets `AcrPull` only |
 | Container Apps environment | Demo suffix | Public consumption/workload profile; no VNet integration |
 | SQL MCP Container App | Demo suffix | Entra-authenticated public HTTPS `/mcp` endpoint |
+| Azure SQL logical server/database | Demo suffix | Entra-only, `SecuredByPerimeter`, synthetic, Basic tier |
+| SQL Network Security Perimeter | Demo suffix | Enforced profile; demo-subscription and exact operator source rules; no VNet/private endpoint |
 | App Insights/Log Analytics | Demo suffix | Public ingestion/query for demo simplicity |
 
-The existing SQL MI remains in `rg-foundry-sql-mcp-dev-centralus`. Cross-resource permissions and SQL grants will target its database explicitly.
+The existing SQL MI remains unchanged in `rg-foundry-sql-mcp-dev-centralus`.
 
 ## Security Exception Register
 
@@ -113,7 +115,7 @@ The existing SQL MI remains in `rg-foundry-sql-mcp-dev-centralus`. Cross-resourc
 |---|---|---|---|
 | Public Foundry endpoint | Browser-based Playground access | Entra RBAC; no keys; synthetic data | Replace with private endpoint/VPN or approved access path |
 | Public MCP endpoint | Foundry Basic project must reach remote MCP | Entra JWT validation, app-role restriction, read-only tools, rate limits where available | Move to private MCP through Standard Setup |
-| SQL MI public endpoint | Public ACA needs SQL reachability | TLS 3342, `AzureCloud` service tag, MCP managed identity, named-object grants | Disable and remove the rule after demo; use private MCP in production |
+| NSP-governed Azure SQL endpoint | Public ACA and developer deployment need SQL reachability | TLS 1433, enforced source rules, Entra-only auth, UAMI, named-object grants | Delete with demo RG; use private SQL connectivity in production |
 | Public ACR/monitoring | Faster demo deployment | Managed identity pull; no secrets in images/config | Private endpoints in production |
 
 No exception permits SQL passwords, shared database credentials, raw-table exposure, unrestricted SQL, write tools, or production/customer data.
@@ -145,11 +147,7 @@ Implement a separate Bicep demo composition that creates:
 - MCP UAMI and narrow ACR role.
 - Public monitoring.
 
-Modify the existing SQL MI only to:
-
-- Start the instance.
-- Enable public data endpoint.
-- Add a time-bounded `AzureCloud` TCP `3342` NSG rule because non-VNet ACA outbound IPs can change.
+Create the disposable Azure SQL logical server/database in the demo RG. Do not modify the existing SQL MI.
 
 Gate:
 
@@ -190,7 +188,7 @@ Implement and deploy:
 - Pinned DAB 2.x configuration.
 - Approved views and procedures only.
 - Entra JWT issuer/audience validation for inbound MCP calls.
-- UAMI connection to the SQL MI public FQDN on TCP `3342`.
+- UAMI connection to Azure SQL Database on TCP `1433`.
 - Read-only DAB operations and stored-procedure custom tools.
 - Health probes, telemetry, and MCP Inspector smoke tests.
 
@@ -262,8 +260,7 @@ Do not claim a milestone works until its gate passes.
 
 ## Cost Controls
 
-- Reuse the existing SQL MI rather than create another instance.
-- Start SQL MI only for implementation and demonstration windows; stop it afterward.
+- Use a low-cost Basic Azure SQL Database in the disposable demo RG.
 - Use minimal non-production ACR, ACA, and monitoring SKUs.
 - Use low model deployment capacity consistent with quota and demo traffic.
 - Tag every demo resource with `purpose=public-evaluation` and an expiration date.
@@ -274,11 +271,8 @@ Do not claim a milestone works until its gate passes.
 Demo cleanup must:
 
 1. Delete `rg-foundry-sql-mcp-demo` through azd/Bicep lifecycle tooling.
-2. Remove demo SQL contained users and role memberships.
-3. Remove demo-specific SQL MI NSG rules.
-4. Disable the SQL MI public endpoint.
-5. Stop SQL MI if no other work needs it.
-6. Verify the existing private Foundry RG remains unchanged except for explicitly approved SQL MI demo toggles.
+2. Delete the demo MCP Entra application.
+3. Verify the existing private Foundry/SQL MI RG remains unchanged.
 
 Rollback must not delete the existing Central US SQL MI, secure Foundry project, VNet, private endpoints, or private DNS zones.
 
