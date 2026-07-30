@@ -21,6 +21,9 @@ param privateEndpointSubnetPrefix string
 @description('Dedicated subnet for Azure SQL Managed Instance.')
 param sqlManagedInstanceSubnetPrefix string
 
+@description('Paired Azure region used by SQL Managed Instance for storage service dependencies.')
+param sqlManagedInstanceSecondaryStorageLocation string = 'eastus2'
+
 @description('Tags applied to network resources.')
 param tags object
 
@@ -28,6 +31,7 @@ var agentSubnetName = 'snet-foundry-agent'
 var mcpSubnetName = 'snet-mcp'
 var privateEndpointSubnetName = 'snet-private-endpoints'
 var sqlManagedInstanceSubnetName = 'snet-sqlmi'
+var sqlManagedInstanceSubnetSlug = replace(replace(sqlManagedInstanceSubnetPrefix, '.', '-'), '/', '-')
 var privateDnsZoneNames = [
   'privatelink.services.ai.azure.com'
   'privatelink.openai.azure.com'
@@ -61,6 +65,110 @@ resource sqlManagedInstanceNetworkSecurityGroup 'Microsoft.Network/networkSecuri
           direction: 'Inbound'
         }
       }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-healthprobe-in-${sqlManagedInstanceSubnetSlug}-v11'
+        properties: {
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          destinationAddressPrefix: sqlManagedInstanceSubnetPrefix
+          access: 'Allow'
+          priority: 100
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-internal-in-${sqlManagedInstanceSubnetSlug}-v11'
+        properties: {
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: sqlManagedInstanceSubnetPrefix
+          destinationAddressPrefix: sqlManagedInstanceSubnetPrefix
+          access: 'Allow'
+          priority: 101
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-optional-azure-out-${sqlManagedInstanceSubnetSlug}'
+        properties: {
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: sqlManagedInstanceSubnetPrefix
+          destinationAddressPrefix: 'AzureCloud'
+          access: 'Allow'
+          priority: 100
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-aad-out-${sqlManagedInstanceSubnetSlug}-v11'
+        properties: {
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: sqlManagedInstanceSubnetPrefix
+          destinationAddressPrefix: 'AzureActiveDirectory'
+          access: 'Allow'
+          priority: 101
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-onedsc-out-${sqlManagedInstanceSubnetSlug}-v11'
+        properties: {
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: sqlManagedInstanceSubnetPrefix
+          destinationAddressPrefix: 'OneDsCollector'
+          access: 'Allow'
+          priority: 102
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-internal-out-${sqlManagedInstanceSubnetSlug}-v11'
+        properties: {
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: sqlManagedInstanceSubnetPrefix
+          destinationAddressPrefix: sqlManagedInstanceSubnetPrefix
+          access: 'Allow'
+          priority: 103
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-strg-p-out-${sqlManagedInstanceSubnetSlug}-v11'
+        properties: {
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: sqlManagedInstanceSubnetPrefix
+          destinationAddressPrefix: 'Storage.${location}'
+          access: 'Allow'
+          priority: 104
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-strg-s-out-${sqlManagedInstanceSubnetSlug}-v11'
+        properties: {
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: sqlManagedInstanceSubnetPrefix
+          destinationAddressPrefix: 'Storage.${sqlManagedInstanceSecondaryStorageLocation}'
+          access: 'Allow'
+          priority: 105
+          direction: 'Outbound'
+        }
+      }
     ]
   }
 }
@@ -71,7 +179,57 @@ resource sqlManagedInstanceRouteTable 'Microsoft.Network/routeTables@2024-05-01'
   tags: tags
   properties: {
     disableBgpRoutePropagation: false
-    routes: []
+    routes: [
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_subnet-${sqlManagedInstanceSubnetSlug}-to-vnetlocal'
+        properties: {
+          addressPrefix: sqlManagedInstanceSubnetPrefix
+          nextHopType: 'VnetLocal'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-AzureActiveDirectory'
+        properties: {
+          addressPrefix: 'AzureActiveDirectory'
+          nextHopType: 'Internet'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-OneDsCollector'
+        properties: {
+          addressPrefix: 'OneDsCollector'
+          nextHopType: 'Internet'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-Storage.${location}'
+        properties: {
+          addressPrefix: 'Storage.${location}'
+          nextHopType: 'Internet'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_mi-Storage.${sqlManagedInstanceSecondaryStorageLocation}'
+        properties: {
+          addressPrefix: 'Storage.${sqlManagedInstanceSecondaryStorageLocation}'
+          nextHopType: 'Internet'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_optional-AzureCloud.${location}'
+        properties: {
+          addressPrefix: 'AzureCloud.${location}'
+          nextHopType: 'Internet'
+        }
+      }
+      {
+        name: 'Microsoft.Sql-managedInstances_UseOnly_optional-AzureCloud.${sqlManagedInstanceSecondaryStorageLocation}'
+        properties: {
+          addressPrefix: 'AzureCloud.${sqlManagedInstanceSecondaryStorageLocation}'
+          nextHopType: 'Internet'
+        }
+      }
+    ]
   }
 }
 
