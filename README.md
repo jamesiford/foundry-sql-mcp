@@ -3,7 +3,7 @@
 > [!NOTE]
 > On branch `demo/public-evaluation`, the active implementation is a disposable public **SQL MCP-only** demonstration. Foundry IQ is out of scope. See [the demo roadmap](docs/demo-roadmap.md), [portal-first setup](docs/demo-portal-runbook.md), and [operator guide](docs/demo-guide.md). The secure private architecture remains on `main`.
 
-For the complete idempotent demo deployment after Azure CLI/azd authentication and environment selection, run `azd up --environment foundry-sql-mcp-demo`. The registered hooks converge prerequisites, both Bicep phases, Entra, the DAB image, SQL migrations, the Foundry connection/agent, and smoke tests.
+For the complete idempotent demo deployment after Azure CLI/azd authentication and environment selection, run `azd up --environment foundry-sql-mcp-demo`. The registered hooks converge prerequisites, both Bicep phases, Entra, the DAB image, SQL migrations, the Foundry connection/agent, and smoke tests. This path is validated in the reference MCAPS tenant/subscription on Windows; other customers must complete the [customer preflight](docs/demo-portal-runbook.md#customer-preflight) for permissions, providers, regions, quota, policy, and tooling.
 
 The public demo topology is not a customer public-database requirement. For private-by-default customer connectivity across Azure SQL Database, Azure SQL Managed Instance, and on-premises SQL Server, see [SQL backend options](docs/sql-backend-options.md).
 

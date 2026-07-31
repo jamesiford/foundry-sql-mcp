@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$EnvironmentName = 'foundry-sql-mcp-demo',
+    [string]$SubscriptionId,
+    [string]$TenantId,
     [Parameter(Mandatory)]
     [string]$Location,
     [string]$SqlLocation = $Location,
@@ -11,11 +13,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$subscriptionId = '49d5f6b0-70f2-4563-acdc-9a31d2eee119'
-$tenantId = '16b3c013-d300-468d-ac64-7eda0820b6d3'
 $account = az account show --query '{subscription:id,tenant:tenantId,user:user.name}' -o json | ConvertFrom-Json
-if ($account.subscription -ne $subscriptionId -or $account.tenant -ne $tenantId) {
-    throw "Azure CLI must target subscription $subscriptionId in tenant $tenantId."
+$SubscriptionId = if ($SubscriptionId) { $SubscriptionId } else { $account.subscription }
+$TenantId = if ($TenantId) { $TenantId } else { $account.tenant }
+if ($account.subscription -ne $SubscriptionId -or $account.tenant -ne $TenantId) {
+    throw "Azure CLI must target subscription $SubscriptionId in tenant $TenantId."
 }
 
 $existingEnvironments = azd env list --output json | ConvertFrom-Json
@@ -35,8 +37,8 @@ while ($tokenPayload.Length % 4) {
 }
 $developerAzureClientIp = ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($tokenPayload)) | ConvertFrom-Json).ipaddr
 $values = [ordered]@{
-    AZURE_SUBSCRIPTION_ID = $subscriptionId
-    AZURE_TENANT_ID = $tenantId
+    AZURE_SUBSCRIPTION_ID = $SubscriptionId
+    AZURE_TENANT_ID = $TenantId
     AZURE_LOCATION = $Location
     AZURE_SQL_LOCATION = $SqlLocation
     AZURE_DEPLOYER_OBJECT_ID = $deployerObjectId

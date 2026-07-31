@@ -17,12 +17,15 @@ foreach ($name in @(
 }
 
 & (Join-Path $PSScriptRoot 'setup-demo-entra.ps1') `
-    -ProjectPrincipalId $values.AZURE_AI_PROJECT_PRINCIPAL_ID
+    -ProjectPrincipalId $values.AZURE_AI_PROJECT_PRINCIPAL_ID `
+    -TenantId $values.AZURE_TENANT_ID `
+    -ApplicationDisplayName "$($values.AZURE_ENV_NAME)-api"
 
 $values = azd env get-values --output json | ConvertFrom-Json
 & (Join-Path $PSScriptRoot 'build-demo-mcp.ps1') `
     -RegistryName $values.AZURE_CONTAINER_REGISTRY_NAME `
-    -McpApplicationId $values.MCP_AUTH_APP_ID
+    -McpApplicationId $values.MCP_AUTH_APP_ID `
+    -TenantId $values.AZURE_TENANT_ID
 
 & (Join-Path $PSScriptRoot 'deploy-demo-database-with-bootstrap.ps1')
 

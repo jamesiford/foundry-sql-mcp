@@ -17,6 +17,25 @@ The deployed environment is public for evaluation, contains synthetic data only,
 | **IaC with `azd up`** | You want a repeatable, validated deployment with the least manual work | Provisions Azure resources and completes Entra, DAB, SQL, Foundry connection, agent registration, and smoke tests |
 | **Portal walkthrough** | You are learning the architecture, need customer-facing screenshots, or must configure/review resources individually | Produces the same architecture through explicit portal and script steps |
 
+> [!WARNING]
+> **Portability is conditional, not universal.** The workflow is validated end to end in the reference MCAPS tenant/subscription on Windows with PowerShell 7. Tenant and subscription IDs are parameterized, but each customer must pass the preflight below. Tenant policy, unavailable providers/SKUs, model quota, regional capacity, or insufficient Entra privileges can block deployment.
+
+### Customer preflight
+
+| Requirement | Customer validation |
+|---|---|
+| Deployment workstation | Windows with PowerShell 7, Git, Azure CLI, azd, Python 3, .NET SDK, and `winget`; other operating systems are not yet validated by this workflow |
+| Azure context | An active subscription in the intended tenant; pass both IDs explicitly to environment setup |
+| Azure permissions | Permission to create the documented resources and Azure role assignments in the target subscription/resource group |
+| Entra permissions | Permission to create/update an app registration and service principal and assign its application role to the Foundry project identity |
+| Resource providers | `Microsoft.CognitiveServices`, `Microsoft.App`, `Microsoft.Sql`, `Microsoft.Network`, `Microsoft.ContainerRegistry`, `Microsoft.OperationalInsights`, `Microsoft.Insights`, and `Microsoft.ManagedIdentity` available/registered |
+| Foundry/model | Foundry project creation and `gpt-5.4-mini` deployment supported in the selected app region, with sufficient model quota/capacity |
+| Azure SQL | Logical-server/database creation allowed in the selected SQL region and Entra-only administrator assignment permitted |
+| NSP | Network Security Perimeter and `SecuredByPerimeter` supported and permitted; this is a reference-subscription demo workaround, not a universal customer requirement |
+| Network/policy | No deny/modify policy conflicts beyond those explicitly handled by the template |
+
+If the customer requires private Azure SQL, SQL MI, on-premises SQL Server, a different model, or a non-Windows deployment host, adapt and validate the appropriate profile in [SQL Backend Options](sql-backend-options.md) before using this command.
+
 ### IaC prerequisites
 
 Install these tools on the deployment workstation:
@@ -35,9 +54,11 @@ Authenticate and select the approved branch, subscription, and tenant:
 
 ```powershell
 git switch demo/public-evaluation
-az login --tenant 16b3c013-d300-468d-ac64-7eda0820b6d3
-az account set --subscription 49d5f6b0-70f2-4563-acdc-9a31d2eee119
-azd auth login --tenant-id 16b3c013-d300-468d-ac64-7eda0820b6d3
+$tenantId = '<customer-tenant-id>'
+$subscriptionId = '<customer-subscription-id>'
+az login --tenant $tenantId
+az account set --subscription $subscriptionId
+azd auth login --tenant-id $tenantId
 ```
 
 Create or refresh the non-secret azd environment. Choose the approved expiration date for the disposable resources:
@@ -45,8 +66,10 @@ Create or refresh the non-secret azd environment. Choose the approved expiration
 ```powershell
 ./scripts/setup-demo-environment.ps1 `
   -EnvironmentName foundry-sql-mcp-demo `
-  -Location eastus2 `
-  -SqlLocation centralus `
+  -SubscriptionId $subscriptionId `
+  -TenantId $tenantId `
+  -Location <validated-app-region> `
+  -SqlLocation <validated-sql-region> `
   -ExpirationDate <yyyy-mm-dd>
 ```
 
@@ -175,6 +198,8 @@ Create or refresh the non-secret azd environment values:
 
 ```powershell
 ./scripts/setup-demo-environment.ps1 `
+  -SubscriptionId 49d5f6b0-70f2-4563-acdc-9a31d2eee119 `
+  -TenantId 16b3c013-d300-468d-ac64-7eda0820b6d3 `
   -Location eastus2 `
   -SqlLocation centralus `
   -ExpirationDate <yyyy-mm-dd>
@@ -357,7 +382,8 @@ The portal does not reliably assign an application role to a managed identity. U
 ```powershell
 $values = azd env get-values --output json | ConvertFrom-Json
 ./scripts/setup-demo-entra.ps1 `
-  -ProjectPrincipalId $values.AZURE_AI_PROJECT_PRINCIPAL_ID
+  -ProjectPrincipalId $values.AZURE_AI_PROJECT_PRINCIPAL_ID `
+  -TenantId $values.AZURE_TENANT_ID
 $values = azd env get-values --output json | ConvertFrom-Json
 ```
 
@@ -424,7 +450,7 @@ The `runtime` section enables streamable HTTP MCP at `/mcp`, disables GraphQL, a
         "provider": "EntraID",
         "jwt": {
           "audience": "00000000-0000-0000-0000-000000000000",
-          "issuer": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3/v2.0"
+          "issuer": "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0"
         }
       },
       "mode": "production"
@@ -433,7 +459,7 @@ The `runtime` section enables streamable HTTP MCP at `/mcp`, disables GraphQL, a
 }
 ```
 
-The all-zero audience is a build-time placeholder. `build-demo-mcp.ps1` replaces it in the ignored build context with the MCP application's **bare client ID**, which matches the `aud` claim Foundry sends. Keep the Foundry project connection audience as `api://<client-id>`; these values are intentionally different.
+The all-zero audience and all-ones tenant are build-time placeholders. `build-demo-mcp.ps1` replaces them in the ignored build context with the MCP application's **bare client ID** and selected tenant ID. Keep the Foundry project connection audience as `api://<client-id>`; these values are intentionally different.
 
 The global tool policy is read-only:
 
@@ -573,7 +599,8 @@ The portal does not turn repository source into the validated DAB image. Build i
 ```powershell
 ./scripts/build-demo-mcp.ps1 `
   -RegistryName $values.AZURE_CONTAINER_REGISTRY_NAME `
-  -McpApplicationId $values.MCP_AUTH_APP_ID
+  -McpApplicationId $values.MCP_AUTH_APP_ID `
+  -TenantId $values.AZURE_TENANT_ID
 ```
 
 The build:

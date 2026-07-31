@@ -2,16 +2,17 @@
 param(
     [Parameter(Mandatory)]
     [string]$ProjectPrincipalId,
+    [Parameter(Mandatory)]
+    [string]$TenantId,
     [string]$ApplicationDisplayName = 'foundry-sql-mcp-demo-api'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$tenantId = '16b3c013-d300-468d-ac64-7eda0820b6d3'
 $account = az account show --query '{tenant:tenantId}' -o json | ConvertFrom-Json
-if ($account.tenant -ne $tenantId) {
-    throw "Azure CLI must target tenant $tenantId."
+if ($account.tenant -ne $TenantId) {
+    throw "Azure CLI must target tenant $TenantId."
 }
 
 $applications = @(az ad app list --display-name $ApplicationDisplayName -o json | ConvertFrom-Json)
@@ -28,7 +29,7 @@ if ($applications.Count -eq 0) {
 $applicationId = $application.appId
 $applicationObjectId = $application.id
 $audience = "api://$applicationId"
-$issuer = "https://login.microsoftonline.com/$tenantId/v2.0"
+$issuer = "https://login.microsoftonline.com/$TenantId/v2.0"
 
 $existingAppRoles = if ($application.PSObject.Properties['appRoles']) { @($application.appRoles) } else { @() }
 $existingRole = @($existingAppRoles | Where-Object { $_.value -eq 'Mcp.Invoke' }) | Select-Object -First 1

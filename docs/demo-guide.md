@@ -19,6 +19,8 @@ After authenticating Azure CLI and azd, the supported end-to-end command is:
 azd up --environment foundry-sql-mcp-demo
 ```
 
+This workflow is validated in the reference MCAPS tenant/subscription on Windows. It is parameterized for other tenants/subscriptions, but customer execution remains conditional on the documented Azure/Entra permissions, provider availability, regional service support, model quota, policy posture, and the Windows/PowerShell toolchain. Complete the [customer preflight](demo-portal-runbook.md#customer-preflight) before treating it as deployable in another environment.
+
 On a new workstation, install Azure CLI, Azure Developer CLI, Git, Python, .NET SDK, PowerShell 7, and `winget` first. The `preup` hook installs or converges DAB 2.0.9, modern sqlcmd, the Python virtual environment, and pinned agent packages.
 
 `azd up` performs two phases:
@@ -47,6 +49,8 @@ Use the region recorded in the validated deployment plan and choose an expiratio
 
 ```powershell
 ./scripts/setup-demo-environment.ps1 `
+  -SubscriptionId 49d5f6b0-70f2-4563-acdc-9a31d2eee119 `
+  -TenantId 16b3c013-d300-468d-ac64-7eda0820b6d3 `
   -Location eastus2 `
   -SqlLocation centralus `
   -ExpirationDate <yyyy-mm-dd>
@@ -76,7 +80,8 @@ The first provision creates Foundry Basic, the model, ACR, the public Container 
 
 ```powershell
 ./scripts/setup-demo-entra.ps1 `
-  -ProjectPrincipalId $values.AZURE_AI_PROJECT_PRINCIPAL_ID
+  -ProjectPrincipalId $values.AZURE_AI_PROJECT_PRINCIPAL_ID `
+  -TenantId $values.AZURE_TENANT_ID
 
 $values = azd env get-values --output json | ConvertFrom-Json
 ```
@@ -88,7 +93,8 @@ This creates a dedicated Entra app, exposes `api://<app-id>`, defines applicatio
 ```powershell
 ./scripts/build-demo-mcp.ps1 `
   -RegistryName $values.AZURE_CONTAINER_REGISTRY_NAME `
-  -McpApplicationId $values.MCP_AUTH_APP_ID
+  -McpApplicationId $values.MCP_AUTH_APP_ID `
+  -TenantId $values.AZURE_TENANT_ID
 ```
 
 The generated build context is under ignored `.dab/`; the committed config retains a placeholder audience. The ACR image contains the real non-secret audience.

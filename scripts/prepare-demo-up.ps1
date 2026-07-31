@@ -12,6 +12,7 @@ foreach ($commandName in @('az', 'azd', 'git', 'python')) {
 }
 
 $currentValues = azd env get-values --output json | ConvertFrom-Json
+$account = az account show --query '{subscription:id,tenant:tenantId}' -o json | ConvertFrom-Json
 $environmentName = if ($env:AZURE_ENV_NAME) {
     $env:AZURE_ENV_NAME
 } elseif ($currentValues.PSObject.Properties['AZURE_ENV_NAME']) {
@@ -34,9 +35,21 @@ $expirationDate = if ($currentValues.PSObject.Properties['DEMO_EXPIRATION_DATE']
 } else {
     (Get-Date).ToUniversalTime().Date.AddDays(14).ToString('yyyy-MM-dd')
 }
+$subscriptionId = if ($currentValues.PSObject.Properties['AZURE_SUBSCRIPTION_ID'] -and $currentValues.AZURE_SUBSCRIPTION_ID) {
+    $currentValues.AZURE_SUBSCRIPTION_ID
+} else {
+    $account.subscription
+}
+$tenantId = if ($currentValues.PSObject.Properties['AZURE_TENANT_ID'] -and $currentValues.AZURE_TENANT_ID) {
+    $currentValues.AZURE_TENANT_ID
+} else {
+    $account.tenant
+}
 
 & (Join-Path $PSScriptRoot 'setup-demo-environment.ps1') `
     -EnvironmentName $environmentName `
+    -SubscriptionId $subscriptionId `
+    -TenantId $tenantId `
     -Location $location `
     -SqlLocation $sqlLocation `
     -ExpirationDate $expirationDate | Out-Null

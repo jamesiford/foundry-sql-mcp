@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory)]
     [string]$RegistryName,
     [Parameter(Mandatory)]
-    [string]$McpApplicationId
+    [string]$McpApplicationId,
+    [Parameter(Mandatory)]
+    [string]$TenantId
 )
 
 Set-StrictMode -Version Latest
@@ -21,12 +23,16 @@ Copy-Item (Join-Path $sourceRoot 'Dockerfile') $buildRoot
 Copy-Item (Join-Path $sourceRoot '.dockerignore') $buildRoot
 $config = Get-Content (Join-Path $sourceRoot 'dab-config.json') -Raw
 $config = $config.Replace('00000000-0000-0000-0000-000000000000', $McpApplicationId)
+$config = $config.Replace('11111111-1111-1111-1111-111111111111', $TenantId)
 $generatedConfig = Join-Path $buildRoot 'dab-config.json'
 Set-Content $generatedConfig $config -NoNewline
 
 $parsed = Get-Content $generatedConfig -Raw | ConvertFrom-Json
 if ($parsed.runtime.host.authentication.jwt.audience -ne $McpApplicationId) {
     throw "Generated DAB audience doesn't match the MCP application ID."
+}
+if ($parsed.runtime.host.authentication.jwt.issuer -ne "https://login.microsoftonline.com/$TenantId/v2.0") {
+    throw "Generated DAB issuer doesn't match the selected tenant ID."
 }
 
 $buildContent = (Get-Content (Join-Path $buildRoot 'Dockerfile') -Raw) + "`n" + (Get-Content $generatedConfig -Raw)

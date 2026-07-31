@@ -2,7 +2,7 @@
 
 ## Status
 
-Demo Deployment Complete - Idempotent azd Up Validated
+Demo Deployment Complete - Idempotent azd Up Validated; Customer Preflight Required
 
 ## Active Demo Profile
 
@@ -110,6 +110,13 @@ Validation completed July 30, 2026:
 - Final content-addressed before/after state was unchanged: 2 agent versions, 10 image tags, 12 Azure resources, and active image `sql-mcp:2.0.9-cac6d92b9c31`.
 - Agent registration explicitly returned `reused: true` for version 2.
 - Image build now hashes the generated `dab-config.json` plus Dockerfile; the second invocation reused `sql-mcp:2.0.9-cac6d92b9c31` instead of building another tag.
+
+### Customer portability scope
+
+- End-to-end validation applies to the reference MCAPS tenant/subscription on Windows with PowerShell 7.
+- Subscription and tenant IDs are no longer hard-coded in executable setup. Environment setup accepts or derives the selected context, Entra reconciliation receives the tenant explicitly, and the DAB issuer is generated for that tenant.
+- Customer execution is not guaranteed universally. It requires preflight confirmation of Azure/Entra privileges, resource-provider availability, Foundry/model support and quota, Azure SQL regional availability, policy compatibility, NSP support, and the validated Windows toolchain.
+- The public Azure SQL + NSP profile is a disposable demo topology. Customer Azure SQL private endpoint, SQL MI private VNet, and on-premises VPN/ExpressRoute profiles require their documented architecture-specific changes and validation.
 
 ### Live deployment status
 
