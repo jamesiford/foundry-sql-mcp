@@ -7,6 +7,7 @@ param deployerPrincipalName string
 param tenantId string
 param developerClientIp string
 param developerAzureClientIp string
+param additionalDeveloperClientIps string
 param accountName string
 param projectName string
 param modelDeploymentName string
@@ -30,6 +31,7 @@ param tags object
 var foundryUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '53ca6127-db72-4b80-b1b0-d745d6d5456d')
 var acrPullRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var deployMcpApp = !empty(mcpContainerImage)
+var additionalDeveloperClientIpList = filter(split(additionalDeveloperClientIps, ','), ip => !empty(trim(ip)))
 var databaseConnectionString = 'Server=tcp:${sqlServer.properties.fullyQualifiedDomainName},1433;Initial Catalog=${sqlDatabase.name};Authentication=Active Directory Managed Identity;User Id=${mcpIdentity.properties.clientId};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'
 var mcpFqdn = mcpApp.?properties.configuration.ingress.fqdn ?? ''
 
@@ -133,7 +135,8 @@ module sqlNetworkSecurityPerimeter 'br/public:avm/res/network/network-security-p
               ],
               empty(developerAzureClientIp) || developerAzureClientIp == developerClientIp ? [] : [
                 '${developerAzureClientIp}/32'
-              ]
+              ],
+              map(additionalDeveloperClientIpList, ip => contains(ip, '/') ? trim(ip) : '${trim(ip)}/32')
             )
           }
           {

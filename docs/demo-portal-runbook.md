@@ -4,6 +4,9 @@ This runbook recreates the simplified `demo/public-evaluation` environment. It u
 
 The deployed environment is public for evaluation, contains synthetic data only, and expires on the date selected by the operator. It does not deploy Foundry IQ, Azure AI Search, a VNet, or private endpoints.
 
+> [!IMPORTANT]
+> This is a demo runbook, not the customer production runbook. It does not assume that a customer will permit public database access. Customer Azure SQL Database should use private endpoints where required, SQL Managed Instance should use its private VNet endpoint, and on-premises SQL Server should use local placement or VPN/ExpressRoute. See [SQL Backend Options](sql-backend-options.md).
+
 ## Target architecture
 
 ```mermaid
@@ -162,6 +165,14 @@ In **Azure portal > Network Security Perimeters > Create**:
 8. Add a diagnostic setting that sends `allLogs` to the demo Log Analytics workspace.
 
 Validate in the SQL server's **Networking** blade that no SQL firewall rules exist. The subscription rule is an evaluation-only accommodation for non-VNet Container Apps egress; production SQL MI uses private networking instead.
+
+Azure portal Query Editor and corporate-routed SSMS/sqlcmd traffic can use backend TDS addresses that differ from `ipify` and the ARM token IP. After one denied connection attempt, wait for NSP diagnostics to ingest and reconcile only the observed `/32`s:
+
+```powershell
+./scripts/update-demo-sql-client-ips.ps1 -LookbackHours 2 -Provision
+```
+
+The helper stores the additional addresses in `DEMO_ADDITIONAL_CLIENT_IPS`, so later `azd provision` runs preserve them. Re-run it if the portal or corporate egress pool changes. If logs prove that addresses rotate within one small contiguous range, replace its accumulated `/32`s with the narrowest observed CIDR, such as `/24`; do not use `0.0.0.0/0`.
 
 ## 8. Configure the MCP Entra application
 

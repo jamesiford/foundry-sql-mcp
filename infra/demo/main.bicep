@@ -26,6 +26,9 @@ param developerClientIp string = ''
 @description('Optional Azure control-plane source IP used by corporate traffic routing.')
 param developerAzureClientIp string = ''
 
+@description('Optional comma-separated additional client IPs or CIDR prefixes observed in SQL NSP denial logs.')
+param additionalDeveloperClientIps string = ''
+
 @description('Demo resource group name.')
 param resourceGroupName string = 'rg-${environmentName}'
 
@@ -83,6 +86,7 @@ module resources 'modules/resources.bicep' = {
     tenantId: tenantId
     developerClientIp: developerClientIp
     developerAzureClientIp: developerAzureClientIp
+    additionalDeveloperClientIps: additionalDeveloperClientIps
     accountName: 'fdrysqlmcpdemo${uniqueSuffix}'
     projectName: 'project-${environmentName}'
     modelDeploymentName: modelDeploymentName

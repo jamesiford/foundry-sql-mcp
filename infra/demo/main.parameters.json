@@ -26,6 +26,9 @@
     "developerAzureClientIp": {
       "value": "${DEMO_AZURE_CLIENT_IP=}"
     },
+    "additionalDeveloperClientIps": {
+      "value": "${DEMO_ADDITIONAL_CLIENT_IPS=}"
+    },
     "modelDeploymentName": {
       "value": "${AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-5.4-mini}"
     },

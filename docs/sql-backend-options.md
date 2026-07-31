@@ -2,11 +2,23 @@
 
 SQL MCP Server is a Data API builder 2.x feature. DAB uses the `mssql` provider for Azure SQL Database, Azure SQL Managed Instance, and SQL Server 2016 or later. The MCP entity/tool configuration can remain the same across these backends; networking, identity bootstrap, and connection strings differ.
 
+## Customer access assumption
+
+No customer profile in this document assumes that the database is publicly accessible. Public Azure SQL Database is used only by the disposable evaluation branch. For customer deployments, choose the network path approved by the customer's security and database teams; private connectivity is the default recommendation.
+
+| Customer backend | Default network path | Public database access required? |
+|---|---|---|
+| Azure SQL Database | VNet-integrated MCP hosting to Azure SQL private endpoint and private DNS | No |
+| Azure SQL Managed Instance | VNet-integrated MCP hosting to the SQL MI private FQDN, directly or through peering | No |
+| On-premises SQL Server | DAB near SQL Server, or Azure-hosted DAB over VPN/ExpressRoute | No |
+
+Public Azure SQL Database with firewall or NSP rules is an optional evaluation profile only when the customer explicitly approves it. Do not expose SQL MI TCP `3342` or an on-premises SQL listener as the default MCP path.
+
 ## Decision matrix
 
 | Backend | DAB support | Preferred MCP placement | Preferred authentication | Main prerequisite |
 |---|---|---|---|---|
-| Azure SQL Database | Supported | Public or private Azure Container Apps | UAMI with Entra contained user | Create user by client-ID SID or external-provider lookup |
+| Azure SQL Database | Supported | Prefer VNet-integrated/private Azure Container Apps for customers | UAMI with Entra contained user | Create user by client-ID SID or external-provider lookup |
 | Azure SQL Managed Instance | Supported | VNet-integrated/private Container Apps | UAMI with Entra user/login | SQL MI server identity must have Entra Directory Readers |
 | On-premises SQL Server 2022 with Azure Arc | Supported | On-prem/DMZ container or Azure over VPN/ExpressRoute | Entra service principal/OBO where validated | Arc-enabled Entra authentication and hybrid network path |
 | On-premises SQL Server 2016-2019 or non-Arc | Supported | Prefer DAB near the database | Windows or SQL authentication | Approved secret/credential lifecycle and network path |
@@ -29,6 +41,33 @@ WITH SID = <mcp-uami-client-id-as-varbinary-16>, TYPE = E;
 `TYPE = E`/direct SID creation is supported by Azure SQL Database. It avoids granting Microsoft Graph directory permissions to the logical-server identity.
 
 The current subscription has a management-group policy that modifies ordinary SQL public network access to `Disabled`. The demo therefore uses Network Security Perimeter rather than bypassing policy with an older API or requesting a broad firewall exemption. This is a demo constraint, not the recommended customer SQL MI topology.
+
+## Azure SQL Database customer pattern
+
+Azure SQL Database is also a supported customer backend, but the public demo topology is not the default customer topology.
+
+### Network requirements
+
+- Disable public network access when the customer's policy requires private data-plane access.
+- Create an Azure SQL private endpoint for subresource `sqlServer` in an approved private-endpoint subnet.
+- Link `privatelink.database.windows.net` to the VNet used by MCP hosting, or configure the equivalent corporate DNS forwarding.
+- Deploy DAB/SQL MCP into a VNet-integrated Container Apps environment, AKS cluster, App Service plan, or other approved compute path that resolves and reaches the private endpoint on TCP `1433`.
+- Keep Foundry-to-MCP connectivity public with Entra authentication or private through Standard Agent Setup according to the customer's agent-network decision; this choice is independent from MCP-to-SQL privacy.
+
+### Identity requirements
+
+- Keep Microsoft Entra-only SQL authentication where supported by the customer.
+- Create the MCP UAMI contained user directly from its client-ID SID and `TYPE = E`, or use `FROM EXTERNAL PROVIDER` when the SQL server identity has the required directory lookup permission.
+- Grant only the named views and stored procedures through `mcp_reader`.
+
+### Portal outline
+
+1. In **Azure portal > Azure SQL**, create or select the logical server/database and configure the Entra administrator.
+2. In **SQL server > Networking**, disable public network access.
+3. In **Private endpoint connections**, create the `sqlServer` private endpoint and integrate `privatelink.database.windows.net`.
+4. In **Container Apps Environment > Networking**, use the customer's delegated infrastructure subnet and verify private DNS resolution.
+5. Apply the SQL schema and UAMI user from a private-network-connected administration host.
+6. Validate that public SQL resolution/access fails while the MCP runtime succeeds over the private endpoint.
 
 ## Azure SQL Managed Instance customer pattern
 
@@ -65,6 +104,16 @@ Directory Readers is broader than the SQL data permissions. It lets the SQL engi
 - MCP team validates managed-identity connection, raw-table denial, and write denial.
 - Foundry team validates private MCP reachability and agent identity/audience.
 
+### Portal outline
+
+1. In **Azure portal > Azure SQL**, create or select SQL Managed Instance in its delegated subnet with public data endpoint disabled.
+2. In **SQL managed instance > Identity**, enable and select the primary managed identity.
+3. In **SQL managed instance > Microsoft Entra admin**, assign the approved PIM-enabled SQL administrator group.
+4. In **Microsoft Entra admin center > Roles and administrators**, have a Privileged Role Administrator assign `Directory Readers` to the SQL MI server identity.
+5. In **Container Apps Environment > Networking**, place MCP hosting in the same or a peered VNet and configure DNS for the SQL MI private FQDN.
+6. From a private-network-connected administration host, create the approved objects, `mcp_reader`, and MCP managed-identity user.
+7. Validate TCP `1433` and SQL authorization from MCP while confirming TCP `3342` and public SQL access remain disabled.
+
 ## On-premises SQL Server pattern
 
 Yes, on-premises SQL Server is supported. DAB supports SQL Server 2016 and later and can run in Azure or on-premises.
@@ -97,6 +146,16 @@ Yes, on-premises SQL Server is supported. DAB supports SQL Server 2016 and later
 - Put an API gateway/reverse proxy in front of public MCP endpoints for JWT validation, rate limiting, and logging.
 - Decide explicitly whether calls use one application identity or OBO user identity.
 - Test failure behavior when VPN/ExpressRoute or on-prem SQL is unavailable.
+
+### Portal and hybrid outline
+
+1. Decide whether DAB runs near SQL Server or in Azure. Prefer near-database placement when it avoids unnecessary hybrid latency and routing.
+2. For Azure-hosted DAB, use **Azure portal > Virtual networks** and **VPN gateways** or **ExpressRoute** to establish private hybrid connectivity; do not publish the SQL listener.
+3. Configure corporate/Azure private DNS so MCP hosting resolves the on-premises SQL name to its private address.
+4. For SQL Server 2022 with Azure Arc, onboard the server through **Azure Arc-enabled servers/SQL Server** and configure the approved Microsoft Entra authentication profile.
+5. Deploy the pinned DAB container on the approved on-premises host or VNet-integrated Azure compute and inject credentials through managed identity or the enterprise secret platform.
+6. Publish only the HTTPS MCP endpoint through the approved reverse proxy or gateway, with Entra JWT validation, rate limiting, and logging.
+7. Validate approved view/procedure access, raw-table/write denial, certificate validation, and failure behavior during hybrid-network interruption.
 
 ## Portable artifacts
 

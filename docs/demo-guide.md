@@ -111,6 +111,14 @@ az containerapp show `
 
 Anonymous and wrong-audience MCP calls must fail. Authenticated project-identity calls are validated when the agent invokes tools.
 
+If portal Query Editor, SSMS, or sqlcmd receives NSP error `42118`, make one connection attempt, allow diagnostics to ingest, and reconcile the observed TDS source `/32`s:
+
+```powershell
+./scripts/update-demo-sql-client-ips.ps1 -LookbackHours 2 -Provision
+```
+
+For a rotating portal/corporate pool, `DEMO_ADDITIONAL_CLIENT_IPS` also accepts explicit CIDRs. Use only the narrowest range demonstrated by NSP logs; never use `0.0.0.0/0`.
+
 ## 8. Register and test the prompt agent
 
 ```powershell
