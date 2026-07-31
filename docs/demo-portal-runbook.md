@@ -7,6 +7,43 @@ The deployed environment is public for evaluation, contains synthetic data only,
 > [!IMPORTANT]
 > This is a demo runbook, not the customer production runbook. It does not assume that a customer will permit public database access. Customer Azure SQL Database should use private endpoints where required, SQL Managed Instance should use its private VNet endpoint, and on-premises SQL Server should use local placement or VPN/ExpressRoute. See [SQL Backend Options](sql-backend-options.md).
 
+## Components and why they exist
+
+Read this section before creating resources. The solution separates model hosting, agent orchestration, MCP hosting, database access, and identity so each principal and service can receive only the access it needs.
+
+| Component | What it is | Why this solution needs it |
+|---|---|---|
+| Repository, Bicep, and Azure Developer CLI (`azd`) | The versioned source and deployment tooling for infrastructure, SQL, DAB configuration, and agent registration | Makes the portal walkthrough reproducible and prevents undocumented portal drift |
+| Azure resource group | A lifecycle and access-management boundary for related Azure resources | Keeps the disposable demo isolated, tagged, auditable, and removable as one unit |
+| Log Analytics workspace | Azure's central log store and query engine | Receives platform and NSP diagnostics used to troubleshoot denied SQL traffic |
+| Application Insights | Azure application performance and distributed telemetry service | Provides the Foundry project monitoring connection and a place for application telemetry as instrumentation is enabled |
+| User-assigned managed identity (UAMI) | An Entra workload identity whose lifecycle is independent of one compute resource | Lets DAB pull its image and authenticate to Azure SQL without passwords |
+| Azure Container Registry (ACR) | A private registry for OCI/Docker container images | Stores the pinned, configuration-specific SQL MCP Server image |
+| Container Apps environment | The shared Azure Container Apps hosting boundary for networking, logging, and revisions | Provides serverless container hosting without managing Kubernetes |
+| SQL MCP Container App | The running DAB 2.0.9 container with HTTPS ingress | Hosts the `/mcp` endpoint that Foundry calls and uses the UAMI to reach SQL |
+| Microsoft Foundry resource | The Azure account-level boundary for models, projects, RBAC, and connections | Hosts the model deployment and the project used by the demo agent |
+| Foundry project | The development and runtime boundary for agents, tools, connections, and project identity | Owns the RemoteTool connection and supplies the managed identity used to call MCP |
+| Model deployment | A named deployment of `gpt-5.4-mini` with allocated capacity | Provides the reasoning model used by the prompt agent |
+| Prompt agent | A versioned Foundry agent definition containing model, instructions, and allowed tools | Converts user requests into approved SQL MCP tool calls and summarizes grounded results |
+| Azure SQL logical server | The management and authentication boundary for Azure SQL databases | Supplies the Entra administrator, TLS/network settings, and database endpoint |
+| Azure SQL Database | The managed relational database containing the synthetic transfer dataset | Stores the tables while exposing only curated views and stored procedures to MCP |
+| Network Security Perimeter (NSP) | An Azure network boundary for supported PaaS resources with explicit access rules | Required only in this demo subscription because policy disables ordinary Azure SQL public access; it is not a SQL MCP requirement |
+| Entra application registration | The definition of the SQL MCP API audience and `Mcp.Invoke` application role | Gives Foundry a target audience for token acquisition and restricts token issuance to assigned workloads |
+| Enterprise application/service principal | The tenant-local instance of the Entra application | Enforces assignment-required and holds the Foundry project identity's `Mcp.Invoke` assignment |
+| SQL MCP Server / Data API builder (DAB) | Microsoft's SQL MCP Server runtime, configured by `dab-config.json` | Converts structured MCP calls into deterministic, permission-checked SQL operations without NL2SQL |
+| `dab-config.json` | DAB's declarative contract for data source, authentication, tools, entities, fields, and permissions | Determines exactly which database objects and operations agents can discover and invoke |
+| Curated SQL contract | Four views, three stored procedures, role `mcp_reader`, and the MCP contained user | Keeps raw tables and writes outside the agent-facing boundary even if another layer is misconfigured |
+| Foundry RemoteTool connection | Project metadata describing the MCP URL, audience, and authentication identity | Tells Agent Service where MCP is and how to obtain the Entra token sent to it |
+
+### Identity flow
+
+The identities are intentionally different:
+
+1. The human setup operator creates/configures resources and applies SQL migrations.
+2. The Foundry project system-assigned identity calls the MCP endpoint and must have `Mcp.Invoke` on the MCP enterprise application.
+3. The MCP UAMI runs with the Container App, pulls from ACR, and connects to SQL as the contained database user in `mcp_reader`.
+4. End users invoke the agent through Foundry RBAC; they do not receive direct SQL access from that role.
+
 ## Target architecture
 
 ```mermaid
@@ -49,6 +86,12 @@ Use separate privileged and runtime identities. The setup operator needs enough 
 
 ## 1. Prepare the repository and Azure context
 
+**What it is:** The repository is the versioned source of truth; `azd` binds that source to one named Azure environment and stores non-secret deployment values.
+
+**Why it is needed:** Portal resources alone don't preserve the exact DAB config, SQL contract, Bicep state, or agent definition. Selecting the branch and tenant prevents deploying the demo into the wrong environment.
+
+**How to configure it:**
+
 ```powershell
 git switch demo/public-evaluation
 az account set --subscription 49d5f6b0-70f2-4563-acdc-9a31d2eee119
@@ -69,6 +112,12 @@ The script records the signed-in user's Entra object ID and UPN plus the direct 
 
 ## 2. Create the resource group and monitoring
 
+**What they are:** The resource group is the demo lifecycle boundary. Log Analytics stores diagnostic records; Application Insights is the application-monitoring resource linked to the Foundry project.
+
+**Why they are needed:** The resource group enables one-command cleanup and scoped review. Monitoring provides deployment/runtime visibility and, critically for this subscription, records NSP allow/deny decisions.
+
+**How to configure them:**
+
 In **Azure portal > Resource groups > Create**:
 
 1. Select subscription `MCAPS-Internal-Non-Prod`.
@@ -85,6 +134,12 @@ In that resource group:
 The deployed reference names are `law-sql-mcp-demo-btqgzq` and `appi-sql-mcp-demo-btqgzq`.
 
 ## 3. Create the MCP identity and container registry
+
+**What they are:** The UAMI is DAB's passwordless workload identity. ACR stores the DAB container image built from the repository configuration.
+
+**Why they are needed:** The identity keeps registry and SQL credentials out of source/configuration. ACR gives Container Apps a controlled, immutable image source.
+
+**How to configure them:**
 
 In **Azure portal > Managed Identities > Create**:
 
@@ -103,6 +158,12 @@ Do not grant the MCP identity `Contributor` on the registry or resource group.
 
 ## 4. Create the public Container Apps environment
 
+**What it is:** A Container Apps environment is the shared hosting, logging, revision, and networking boundary in which the SQL MCP Container App runs.
+
+**Why it is needed:** SQL MCP Server is self-hosted software. Container Apps runs the pinned Linux container with HTTPS ingress and managed identity without requiring an AKS cluster.
+
+**How to configure it:**
+
 In **Azure portal > Container Apps Environments > Create**:
 
 1. Select `rg-foundry-sql-mcp-demo` and East US 2.
@@ -111,6 +172,12 @@ In **Azure portal > Container Apps Environments > Create**:
 4. Do not create a workload Container App yet; its image and SQL authorization are prepared in later steps.
 
 ## 5. Create the Foundry resource, project, and model
+
+**What they are:** The Foundry resource is the account-level Azure boundary; the project owns agents/connections and has its own identity; the model deployment supplies inference capacity.
+
+**Why they are needed:** The project identity authenticates to MCP, the model decides which approved tool to invoke, and the project registers the versioned prompt agent visible in Playground.
+
+**How to configure them:**
 
 In **Azure portal > Microsoft Foundry > Create**:
 
@@ -136,6 +203,12 @@ Record the project identity's principal ID. The deployed reference project ident
 
 ## 6. Create Entra-only Azure SQL Database
 
+**What it is:** Azure SQL Database is the managed relational backend. Its logical server controls Entra administration, network policy, TLS, and the database hostname.
+
+**Why it is needed:** The demo needs deterministic relational data for SQL MCP tools. Entra-only authentication removes SQL passwords, while Azure SQL Database supports direct client-ID SID creation for the MCP UAMI.
+
+**How to configure it:**
+
 In **Azure portal > Azure SQL > Create > SQL database**:
 
 1. Select `rg-foundry-sql-mcp-demo` and create a new logical server in **Central US**.
@@ -150,6 +223,12 @@ In **Azure portal > Azure SQL > Create > SQL database**:
 The deployed logical server is `sqlsqlmcpdemog64t67.database.windows.net`.
 
 ## 7. Protect SQL with Network Security Perimeter
+
+**What it is:** NSP is a policy-aware PaaS network boundary with profiles, inbound/outbound rules, associations, and diagnostic logs.
+
+**Why it is needed here:** It is not required by SQL MCP Server or by the customer design. This demo subscription has management-group policy that forces ordinary Azure SQL public network access off, so NSP is the available public-evaluation path between non-VNet Container Apps and SQL.
+
+**How to configure it:**
 
 The subscription has management-group policy `AzureSQL_PublicNetwork_Modify`, which disables ordinary SQL public access. Do not bypass it with an old API version or broad SQL firewall rule.
 
@@ -175,6 +254,12 @@ Azure portal Query Editor and corporate-routed SSMS/sqlcmd traffic can use backe
 The helper stores the additional addresses in `DEMO_ADDITIONAL_CLIENT_IPS`, so later `azd provision` runs preserve them. Re-run it if the portal or corporate egress pool changes. If logs prove that addresses rotate within one small contiguous range, replace its accumulated `/32`s with the narrowest observed CIDR, such as `/24`; do not use `0.0.0.0/0`.
 
 ## 8. Configure the MCP Entra application
+
+**What it is:** The app registration defines the MCP API identifier and `Mcp.Invoke` application permission. Its enterprise application is the tenant object on which assignment-required and workload assignments are enforced.
+
+**Why it is needed:** Foundry needs an audience for its managed-identity token. Requiring assignment prevents unassigned tenant identities from acquiring an application token for this MCP API.
+
+**How to configure it:**
 
 In **Microsoft Entra admin center > App registrations > New registration**:
 
@@ -203,7 +288,205 @@ Keep these two audience forms distinct:
 
 Foundry sends a tenant-v2 token containing `Mcp.Invoke`. The project connection must explicitly enable use of the project managed identity.
 
-## 9. Build the pinned DAB image
+## 9. Configure and build SQL MCP Server
+
+**What it is:** SQL MCP Server is the MCP capability included in Data API builder. The committed configuration is [src/mcp-server/dab-config.json](../src/mcp-server/dab-config.json), and the pinned container definition is [src/mcp-server/Dockerfile](../src/mcp-server/Dockerfile).
+
+**Why it is needed:** Foundry doesn't query SQL directly. DAB provides the deterministic entity abstraction, JWT validation, RBAC, structured SQL generation, field metadata, and MCP protocol endpoint between the agent and database.
+
+**How to configure it:** Treat `dab-config.json` as the server's public data contract: it controls the database connection, authentication, MCP tools, exposed objects, field metadata, and permitted operations.
+
+### Pin the schema and database provider
+
+The configuration pins the DAB 2.0.9 schema and selects the `mssql` provider:
+
+```json
+{
+  "$schema": "https://github.com/Azure/data-api-builder/releases/download/v2.0.9/dab.draft.schema.json",
+  "data-source": {
+    "database-type": "mssql",
+    "connection-string": "@env('DATABASE_CONNECTION_STRING')",
+    "options": {
+      "set-session-context": false
+    }
+  }
+}
+```
+
+Do not put a credential-bearing connection string in this file. The Container App supplies `DATABASE_CONNECTION_STRING` at runtime. This demo uses managed identity, TLS encryption, certificate validation, the UAMI client ID, and database `TransferDemo`.
+
+### Configure the runtime and MCP tools
+
+The `runtime` section enables streamable HTTP MCP at `/mcp`, disables GraphQL, and configures Entra JWT validation:
+
+```json
+{
+  "runtime": {
+    "graphql": { "enabled": false },
+    "mcp": {
+      "enabled": true,
+      "path": "/mcp",
+      "dml-tools": {
+        "describe-entities": true,
+        "create-record": false,
+        "read-records": true,
+        "update-record": false,
+        "delete-record": false,
+        "execute-entity": false,
+        "aggregate-records": {
+          "enabled": true,
+          "query-timeout": 30
+        }
+      }
+    },
+    "host": {
+      "authentication": {
+        "provider": "EntraID",
+        "jwt": {
+          "audience": "00000000-0000-0000-0000-000000000000",
+          "issuer": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3/v2.0"
+        }
+      },
+      "mode": "production"
+    }
+  }
+}
+```
+
+The all-zero audience is a build-time placeholder. `build-demo-mcp.ps1` replaces it in the ignored build context with the MCP application's **bare client ID**, which matches the `aud` claim Foundry sends. Keep the Foundry project connection audience as `api://<client-id>`; these values are intentionally different.
+
+The global tool policy is read-only:
+
+- `describe_entities`, `read_records`, and `aggregate_records` are available for approved views.
+- Create, update, and delete are hidden globally.
+- Generic `execute_entity` is hidden globally. Approved stored procedures are exposed only as individually named custom tools.
+- A tool must also be allowed by its entity permissions and by the prompt agent's `allowed_tools` list.
+
+### Explicitly expose approved entities
+
+Keep `autoentities` empty. Do not use wildcard discovery for the customer contract because it can expose newly created database objects without review.
+
+Each approved view has:
+
+- A stable DAB entity name.
+- The exact `dbo.<view>` source and source type `view`.
+- A semantic entity description.
+- Explicit field names and descriptions so agents don't guess SQL column names.
+- One stable field marked `primary-key` for DAB query/pagination behavior.
+- Read-only permissions.
+- `mcp.dml-tools=true` and `mcp.custom-tool=false`.
+
+Representative view configuration:
+
+```json
+{
+  "entities": {
+    "TransferSummary": {
+      "description": "Read-only transfer status, client, account, advisor, amount, dates, priority, and age.",
+      "source": {
+        "object": "dbo.vw_transfer_summary",
+        "type": "view"
+      },
+      "fields": [
+        {
+          "name": "TransferId",
+          "description": "Stable numeric transfer identifier",
+          "primary-key": true
+        },
+        {
+          "name": "ClientCode",
+          "description": "Exact synthetic client identifier"
+        }
+      ],
+      "permissions": [
+        { "role": "Mcp.Invoke", "actions": [{ "action": "read" }] },
+        { "role": "authenticated", "actions": [{ "action": "read" }] }
+      ],
+      "mcp": {
+        "dml-tools": true,
+        "custom-tool": false
+      }
+    }
+  }
+}
+```
+
+The committed configuration exposes only:
+
+| DAB entity | SQL source | MCP behavior |
+|---|---|---|
+| `TransferSummary` | `dbo.vw_transfer_summary` | Read and aggregate |
+| `ClientAccountOverview` | `dbo.vw_client_account_overview` | Read and aggregate |
+| `TransferRiskDashboard` | `dbo.vw_transfer_risk_dashboard` | Read and aggregate |
+| `AdvisorPipeline` | `dbo.vw_advisor_pipeline` | Read and aggregate |
+
+### Configure stored procedures as named custom tools
+
+Each approved stored procedure is an explicit entity with typed parameters, `execute` permission, `custom-tool=true`, and generic DML tools disabled:
+
+```json
+{
+  "entities": {
+    "GetTransferSummaryByClient": {
+      "description": "Return all transfer summaries for one exact client code such as CLIENT-001.",
+      "source": {
+        "object": "dbo.usp_GetTransferSummaryByClient",
+        "type": "stored-procedure",
+        "parameters": [
+          {
+            "name": "ClientCode",
+            "description": "Exact client code",
+            "required": true
+          }
+        ]
+      },
+      "permissions": [
+        { "role": "Mcp.Invoke", "actions": [{ "action": "execute" }] },
+        { "role": "authenticated", "actions": [{ "action": "execute" }] }
+      ],
+      "mcp": {
+        "custom-tool": true,
+        "dml-tools": false
+      }
+    }
+  }
+}
+```
+
+The resulting named tools are:
+
+| MCP custom tool | SQL procedure |
+|---|---|
+| `get_transfer_summary_by_client` | `dbo.usp_GetTransferSummaryByClient` |
+| `get_open_risk_alerts` | `dbo.usp_GetOpenRiskAlerts` |
+| `get_advisor_pipeline` | `dbo.usp_GetAdvisorPipeline` |
+
+Do not expose a stored procedure merely because it exists. It must be reviewed, granted to `mcp_reader`, configured as a DAB entity, and added to the agent allowlist.
+
+### Understand the two DAB roles
+
+The MCP enterprise application requires an explicit `Mcp.Invoke` assignment before Entra issues an application token. DAB includes identical read/execute-only permissions for `Mcp.Invoke` and its system `authenticated` role because role selection differs by request surface. Neither role grants create, update, delete, raw-table access, or arbitrary SQL. The database-level `mcp_reader` role remains the final authorization boundary.
+
+For a customer deployment, change role names only after validating the actual token claims and whether the client sends `X-MS-API-ROLE`. Never broaden an entity to `anonymous` to fix a role-selection problem.
+
+### Validate before building
+
+Run the repository's aggregate validation:
+
+```powershell
+./scripts/test-demo.ps1
+```
+
+It parses `dab-config.json`, validates it against DAB 2.0.9, confirms all entities have only the expected roles/actions, verifies write and generic-execute tools are disabled, and checks the pinned image version. For a focused schema check:
+
+```powershell
+$env:DATABASE_CONNECTION_STRING = 'Server=tcp:demo.invalid,1433;Initial Catalog=TransferDemo;Authentication=Active Directory Managed Identity;User Id=00000000-0000-0000-0000-000000000000;Encrypt=True;TrustServerCertificate=False;'
+dab validate --config ./src/mcp-server/dab-config.json
+```
+
+The expected result contains `The config satisfies the schema requirements`. This validation checks configuration shape; live startup still validates database connectivity and object metadata.
+
+### Build the pinned image
 
 The portal does not turn repository source into the validated DAB image. Build it through ACR Tasks:
 
@@ -223,6 +506,12 @@ The build:
 The currently validated image is `acrsqlmcpdemobtqgzq.azurecr.io/sql-mcp:2.0.9-0d4a93e-4b2945a8`, digest `sha256:61923e5183f2f46772ade50e2f2ea108852e1e81271cdf309e516bf9ac4b3af0`.
 
 ## 10. Deploy the SQL contract and identity
+
+**What it is:** The SQL contract is the database-side security and semantic layer: synthetic tables, curated views, parameterized procedures, `mcp_reader`, and the MCP UAMI contained user.
+
+**Why it is needed:** DAB permissions can't grant access SQL itself denies. Named-object SQL grants provide defense in depth and prevent raw-table or write access even if an API permission is broadened accidentally.
+
+**How to configure it:**
 
 Install modern sqlcmd once:
 
@@ -250,6 +539,12 @@ Azure SQL Database creates the MCP contained user from the UAMI client-ID SID an
 
 ## 11. Create the SQL MCP Container App
 
+**What it is:** This is the running instance of the configured DAB image, with an external HTTPS endpoint and the MCP UAMI attached.
+
+**Why it is needed:** Foundry requires a remote HTTP MCP endpoint. The app also supplies the managed-identity SQL connection string and pulls the pinned image from ACR.
+
+**How to configure it:**
+
 In **Azure portal > Container Apps > Create**:
 
 1. Select the existing public environment in East US 2.
@@ -271,6 +566,12 @@ Server=tcp:<sql-server>.database.windows.net,1433;Initial Catalog=TransferDemo;A
 Do not add SQL passwords, registry passwords, or secrets to the Container App.
 
 ## 12. Create the Foundry MCP project connection
+
+**What it is:** A RemoteTool project connection stores the MCP endpoint, audience, and selected Foundry identity authentication mode.
+
+**Why it is needed:** The agent definition references a connection by name. Agent Service uses it to acquire a token from the project identity and attach that token when calling `/mcp`.
+
+**How to configure it:**
 
 In **Microsoft Foundry portal > project > Build > Tools**:
 
@@ -295,6 +596,12 @@ If the portal doesn't expose `useWorkspaceManagedIdentity`, run `azd provision -
 
 ## 13. Register the prompt agent
 
+**What it is:** A prompt agent is an immutable Foundry version containing the model, behavioral instructions, MCP connection reference, tool allowlist, and approval policy.
+
+**Why it is needed:** DAB exposes capabilities, but the agent governs when and how those capabilities are selected and how tool results are presented without inventing data.
+
+**How to configure it:**
+
 The project-native prompt agent is versioned through the Foundry v2 SDK so its immutable definition is reproducible:
 
 ```powershell
@@ -314,6 +621,12 @@ The agent uses `gpt-5.4-mini`, connection `sql-mcp-demo`, and only these tools:
 The three report intents are routed to their custom tools. All tools are read-only, so approval is set to `never`. The currently validated agent is `transfer-agent-sql-mcp-demo:2`.
 
 ## 14. Validate in the portals
+
+**What it is:** Validation checks the deployed control plane, identities, network rules, runtime health, and agent behavior as one system.
+
+**Why it is needed:** A successful ARM deployment doesn't prove SQL connectivity, JWT claims, DAB permissions, or deterministic tool routing. The demo isn't complete until those paths and negative controls pass.
+
+**How to validate it:**
 
 In **Azure portal**:
 
@@ -343,6 +656,12 @@ Summarize the transfer pipeline for advisor ADV-MIL-01.
 Each response must contain grounded synthetic SQL rows. Anonymous MCP/data calls must fail, wrong-audience tokens must fail, and raw tables/write operations must remain unavailable.
 
 ## 15. Cleanup
+
+**What it is:** Cleanup removes the disposable demo resource group and MCP Entra application while preserving the private customer-reference environment.
+
+**Why it is needed:** Public evaluation endpoints and paid resources are time-bounded exceptions, not durable production defaults.
+
+**How to perform it:**
 
 The supported cleanup path removes the disposable resource group and MCP Entra application without touching the private SQL MI environment:
 
