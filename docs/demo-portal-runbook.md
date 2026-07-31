@@ -7,6 +7,78 @@ The deployed environment is public for evaluation, contains synthetic data only,
 > [!IMPORTANT]
 > This is a demo runbook, not the customer production runbook. It does not assume that a customer will permit public database access. Customer Azure SQL Database should use private endpoints where required, SQL Managed Instance should use its private VNet endpoint, and on-premises SQL Server should use local placement or VPN/ExpressRoute. See [SQL Backend Options](sql-backend-options.md).
 
+## Choose your deployment path
+
+> [!TIP]
+> **Recommended fast path: deploy with IaC.** You do not need to perform every portal step manually. Use the repository's idempotent `azd up` workflow to provision and configure the complete public demo. Use the numbered portal sections when you want to understand each component, verify the deployment, or recover one stage selectively.
+
+| Path | Choose it when | Result |
+|---|---|---|
+| **IaC with `azd up`** | You want a repeatable, validated deployment with the least manual work | Provisions Azure resources and completes Entra, DAB, SQL, Foundry connection, agent registration, and smoke tests |
+| **Portal walkthrough** | You are learning the architecture, need customer-facing screenshots, or must configure/review resources individually | Produces the same architecture through explicit portal and script steps |
+
+### IaC prerequisites
+
+Install these tools on the deployment workstation:
+
+- PowerShell 7
+- Git
+- Azure CLI
+- Azure Developer CLI (`azd`)
+- Python 3
+- .NET SDK
+- `winget` on Windows
+
+The `preup` hook installs or converges Data API builder 2.0.9, modern sqlcmd, the workspace Python virtual environment, and pinned agent SDK packages. The operator still needs the Azure/Entra permissions listed under [Required access](#required-access).
+
+Authenticate and select the approved branch, subscription, and tenant:
+
+```powershell
+git switch demo/public-evaluation
+az login --tenant 16b3c013-d300-468d-ac64-7eda0820b6d3
+az account set --subscription 49d5f6b0-70f2-4563-acdc-9a31d2eee119
+azd auth login --tenant-id 16b3c013-d300-468d-ac64-7eda0820b6d3
+```
+
+Create or refresh the non-secret azd environment. Choose the approved expiration date for the disposable resources:
+
+```powershell
+./scripts/setup-demo-environment.ps1 `
+  -EnvironmentName foundry-sql-mcp-demo `
+  -Location eastus2 `
+  -SqlLocation centralus `
+  -ExpirationDate <yyyy-mm-dd>
+```
+
+Preview the control-plane deployment if required by your change process:
+
+```powershell
+azd provision --preview --environment foundry-sql-mcp-demo --no-prompt
+```
+
+Run the complete deployment:
+
+```powershell
+azd up --environment foundry-sql-mcp-demo --no-prompt
+```
+
+### What `azd up` completes
+
+The root hooks in `azure.yaml` make `azd up` an end-to-end workflow:
+
+1. Validates Bicep, DAB, SQL, Python, and local prerequisites.
+2. Creates or reconciles Foundry, the model deployment, monitoring, ACR, managed identity, Container Apps environment, Azure SQL Database, and the demo NSP.
+3. Creates or reconciles the Entra MCP application, `Mcp.Invoke` app role, assignment-required service principal, and project-identity assignment.
+4. Reuses or builds the content-addressed DAB 2.0.9 image.
+5. Applies idempotent SQL schema, seed, view, procedure, role, and contained-user migrations. Temporary SQL bootstrap access is always restored in `finally`.
+6. Performs the image-dependent Bicep pass for the Container App and Foundry RemoteTool connection.
+7. Reuses an unchanged prompt-agent version or creates a new version only when its definition changes.
+8. Verifies Container App health and runs the three deterministic agent smoke tests.
+
+The workflow is idempotent. Re-running the same source state reconciles resources without duplicating Entra assignments, SQL records, ACR image content, or agent versions. A repeat run was validated with unchanged Azure resource count, image-tag count, agent-version count, and active image.
+
+After the command succeeds, open **Microsoft Foundry portal > `project-foundry-sql-mcp-demo` > Build > Agents > `transfer-agent-sql-mcp-demo` > Playground**. Continue with [Validate in the portals](#14-validate-in-the-portals) for the manual review checklist.
+
 ## Components and why they exist
 
 Read this section before creating resources. The solution separates model hosting, agent orchestration, MCP hosting, database access, and identity so each principal and service can receive only the access it needs.
