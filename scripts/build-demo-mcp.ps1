@@ -29,15 +29,37 @@ if ($parsed.runtime.host.authentication.jwt.audience -ne $McpApplicationId) {
     throw "Generated DAB audience doesn't match the MCP application ID."
 }
 
-$gitSuffix = git rev-parse --short HEAD
-$configHash = (Get-FileHash $generatedConfig -Algorithm SHA256).Hash.Substring(0, 8).ToLowerInvariant()
-$imageTag = "2.0.9-$gitSuffix-$configHash"
+$buildContent = (Get-Content (Join-Path $buildRoot 'Dockerfile') -Raw) + "`n" + (Get-Content $generatedConfig -Raw)
+$hashAlgorithm = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $buildHashBytes = $hashAlgorithm.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($buildContent))
+} finally {
+    $hashAlgorithm.Dispose()
+}
+$buildHash = ([System.BitConverter]::ToString($buildHashBytes) -replace '-', '').Substring(0, 12).ToLowerInvariant()
+$imageTag = "2.0.9-$buildHash"
+$loginServer = az acr show --name $RegistryName --query loginServer -o tsv
+if ($LASTEXITCODE -ne 0) {
+    throw "Container registry '$RegistryName' was not found."
+}
+$image = "$loginServer/sql-mcp:$imageTag"
+$existingTag = az acr repository show-tags --name $RegistryName --repository sql-mcp --query "[?@=='$imageTag'] | [0]" -o tsv 2>$null
+if ($LASTEXITCODE -eq 0 -and $existingTag -eq $imageTag) {
+    azd env set MCP_CONTAINER_IMAGE $image
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to store the existing MCP image in the azd environment.'
+    }
+    Write-Host "Reusing existing MCP image: $image"
+    return
+}
+
 az acr build --registry $RegistryName --image "sql-mcp:$imageTag" $buildRoot
 if ($LASTEXITCODE -ne 0) {
     throw 'ACR build failed.'
 }
 
-$loginServer = az acr show --name $RegistryName --query loginServer -o tsv
-$image = "$loginServer/sql-mcp:$imageTag"
 azd env set MCP_CONTAINER_IMAGE $image
+if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to store the built MCP image in the azd environment.'
+}
 Write-Host "Built and configured MCP image: $image"

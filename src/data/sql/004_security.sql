@@ -1,6 +1,4 @@
 :setvar DatabaseName "TransferDemo"
-:setvar McpIdentityName "REQUIRED"
-:setvar McpIdentityClientId "REQUIRED"
 
 USE [$(DatabaseName)];
 GO

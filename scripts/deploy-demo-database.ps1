@@ -17,8 +17,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$sqlcmd = 'C:\Program Files\SqlCmd\sqlcmd.exe'
-if (-not (Test-Path $sqlcmd)) {
+$sqlcmdCandidates = @(
+    'C:\Program Files\SqlCmd\sqlcmd.exe',
+    (Get-Command sqlcmd -ErrorAction SilentlyContinue).Source
+) | Where-Object { $_ -and (Test-Path $_) }
+$sqlcmd = $sqlcmdCandidates | Select-Object -First 1
+if (-not $sqlcmd) {
     throw 'Modern sqlcmd is required. Install winget package Microsoft.Sqlcmd before deploying the demo database.'
 }
 

@@ -11,6 +11,25 @@ This guide operates the `demo/public-evaluation` branch. It creates a disposable
 - Keep Entra authentication, `Mcp.Invoke`, managed identity, `mcp_reader`, and read-only DAB tools enabled.
 - Run cleanup after the demonstration.
 
+## Recommended: complete idempotent deployment
+
+After authenticating Azure CLI and azd, the supported end-to-end command is:
+
+```powershell
+azd up --environment foundry-sql-mcp-demo
+```
+
+On a new workstation, install Azure CLI, Azure Developer CLI, Git, Python, .NET SDK, PowerShell 7, and `winget` first. The `preup` hook installs or converges DAB 2.0.9, modern sqlcmd, the Python virtual environment, and pinned agent packages.
+
+`azd up` performs two phases:
+
+1. `preup` validates source and prepares the non-secret environment; the main Bicep pass creates/reconciles base Azure resources.
+2. `postup` reconciles the Entra MCP application, reuses or builds the content-addressed DAB image, applies idempotent SQL migrations under temporary/restored NSP access, performs the image-dependent Bicep pass, reuses or creates the prompt-agent version, and runs smoke tests.
+
+Re-running the same source state is safe: Azure resources are reconciled, Entra assignments aren't duplicated, MERGE/CREATE OR ALTER SQL scripts preserve one deterministic dataset, existing image content is reused, and an unchanged agent definition reuses its latest version.
+
+For non-interactive first use, create/select the azd environment once and set the subscription before running `azd up --no-prompt`. The remaining numbered sections document the individual phases for portal understanding and recovery.
+
 ## 1. Select the branch and Azure context
 
 ```powershell

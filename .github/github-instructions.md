@@ -227,7 +227,7 @@ Both prompt agents should avoid inventing data, state clearly when supporting da
 
 The repo is complete when:
 
-- azd up provisions the core infrastructure or clearly documents preview-only manual steps.
+- On `demo/public-evaluation`, `azd up` idempotently completes prerequisites, both infrastructure passes, Entra, DAB image, SQL migrations, agent registration, and smoke tests. Other branches must provision their core infrastructure or clearly document preview-only manual steps.
 - SQL MI database is created and seeded with synthetic data.
 - Least-privileged access is enforced.
 - SQL MCP Server works.

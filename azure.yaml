@@ -6,3 +6,14 @@ infra:
   provider: bicep
   path: infra/demo
   module: main
+hooks:
+  preup:
+    shell: pwsh
+    run: ./scripts/prepare-demo-up.ps1
+    interactive: true
+    continueOnError: false
+  postup:
+    shell: pwsh
+    run: ./scripts/complete-demo-up.ps1
+    interactive: true
+    continueOnError: false

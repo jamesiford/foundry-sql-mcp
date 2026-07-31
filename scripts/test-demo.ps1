@@ -21,10 +21,21 @@ foreach ($relativePath in $requiredPaths) {
     }
 }
 
-$bicepOutput = az bicep build --file (Join-Path $repoRoot 'infra/demo/main.bicep') --stdout 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0 -or $bicepOutput -match 'WARNING|ERROR') {
-    Write-Error $bicepOutput
-    throw 'Demo Bicep validation failed.'
+$compiledTemplate = Join-Path ([System.IO.Path]::GetTempPath()) "foundry-sql-mcp-$([guid]::NewGuid()).json"
+try {
+    $bicepDiagnostics = az bicep build `
+        --file (Join-Path $repoRoot 'infra/demo/main.bicep') `
+        --outfile $compiledTemplate 2>&1 | Out-String
+    $actionableDiagnostics = @(
+        $bicepDiagnostics -split '\r?\n' |
+            Where-Object { $_ -notmatch '^WARNING: A new Bicep release is available:' }
+    ) -join [Environment]::NewLine
+    if ($LASTEXITCODE -ne 0 -or $actionableDiagnostics -match '(?im)^\s*(warning|error)') {
+        Write-Error $actionableDiagnostics
+        throw 'Demo Bicep validation failed.'
+    }
+} finally {
+    Remove-Item $compiledTemplate -Force -ErrorAction SilentlyContinue
 }
 
 Get-Content (Join-Path $repoRoot 'infra/demo/main.parameters.json') -Raw | ConvertFrom-Json | Out-Null

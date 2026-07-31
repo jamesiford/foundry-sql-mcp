@@ -110,6 +110,14 @@ Create or refresh the non-secret azd environment values:
 
 The script records the signed-in user's Entra object ID and UPN plus the direct and Azure-routed client IPs needed by the SQL perimeter profile.
 
+For the complete repository-driven deployment, `azure.yaml` registers idempotent `preup` and `postup` hooks. After the environment is selected, this one command performs all numbered implementation phases and smoke validation:
+
+```powershell
+azd up --environment foundry-sql-mcp-demo
+```
+
+The portal steps below explain the resources that command creates and are also useful for inspection or targeted recovery.
+
 ## 2. Create the resource group and monitoring
 
 **What they are:** The resource group is the demo lifecycle boundary. Log Analytics stores diagnostic records; Application Insights is the application-monitoring resource linked to the Foundry project.
@@ -500,10 +508,10 @@ The build:
 
 - Pins `mcr.microsoft.com/azure-databases/data-api-builder:2.0.9`.
 - Replaces the committed placeholder with the bare MCP application client ID.
-- Tags the image with Git commit and generated-config hash.
+- Tags the image with a hash of the generated configuration and Dockerfile, so documentation-only commits don't rebuild the runtime.
 - Stores the resulting image URI in `MCP_CONTAINER_IMAGE`.
 
-The currently validated image is `acrsqlmcpdemobtqgzq.azurecr.io/sql-mcp:2.0.9-0d4a93e-4b2945a8`, digest `sha256:61923e5183f2f46772ade50e2f2ea108852e1e81271cdf309e516bf9ac4b3af0`.
+The currently validated content-addressed image is `acrsqlmcpdemobtqgzq.azurecr.io/sql-mcp:2.0.9-cac6d92b9c31`, digest `sha256:4e72f84201e50f8c3c07729811b67e98773b48813db946c1db820a5d7350a77b`.
 
 ## 10. Deploy the SQL contract and identity
 
@@ -676,9 +684,9 @@ After cleanup, verify that `rg-foundry-sql-mcp-demo` and `foundry-sql-mcp-demo-a
 The portal steps explain every resource and security decision. For repeatable recreation, Bicep remains authoritative:
 
 ```powershell
-./scripts/test-demo.ps1
-azd provision --preview --no-prompt
-azd provision --no-prompt
+azd up --environment foundry-sql-mcp-demo
 ```
+
+The command is intentionally idempotent. Its hooks validate prerequisites, reconcile both infrastructure phases, reuse unchanged image and agent artifacts, rerun deterministic SQL migrations, restore the prior NSP rule in `finally`, and execute end-to-end smoke tests. Use `azd provision --preview --no-prompt` separately when you need a control-plane preview without running data-plane setup.
 
 See [SQL MCP Public Demo Guide](demo-guide.md) for the concise operator sequence and [SQL Backend Options](sql-backend-options.md) for customer SQL MI and on-premises SQL Server requirements.

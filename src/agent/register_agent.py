@@ -6,6 +6,7 @@ from pathlib import Path
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import MCPTool, PromptAgentDefinition
+from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 
 
@@ -27,6 +28,29 @@ def required_environment(name: str) -> str:
     return value
 
 
+def definition_matches(current: dict, desired: dict) -> bool:
+    current_tool = current.get("tools", [{}])[0]
+    desired_tool = desired.get("tools", [{}])[0]
+    current_allowed_tools = current_tool.get("allowed_tools", [])
+    if isinstance(current_allowed_tools, dict):
+        current_allowed_tools = current_allowed_tools.get("tool_names", [])
+    desired_allowed_tools = desired_tool.get("allowed_tools", [])
+    if isinstance(desired_allowed_tools, dict):
+        desired_allowed_tools = desired_allowed_tools.get("tool_names", [])
+    return (
+        current.get("kind") == desired.get("kind")
+        and current.get("model") == desired.get("model")
+        and current.get("instructions") == desired.get("instructions")
+        and current_tool.get("type") == desired_tool.get("type")
+        and current_tool.get("server_label") == desired_tool.get("server_label")
+        and current_tool.get("server_url") == desired_tool.get("server_url")
+        and current_allowed_tools == desired_allowed_tools
+        and current_tool.get("require_approval") == desired_tool.get("require_approval")
+        and current_tool.get("project_connection_id")
+        == desired_tool.get("project_connection_id")
+    )
+
+
 def main() -> None:
     project_endpoint = required_environment("AZURE_AI_PROJECT_ENDPOINT")
     model_deployment = required_environment("AZURE_AI_MODEL_DEPLOYMENT_NAME")
@@ -45,13 +69,36 @@ def main() -> None:
         require_approval="never",
         project_connection_id=connection_name,
     )
-    agent = project_client.agents.create_version(
-        agent_name=AGENT_NAME,
-        definition=PromptAgentDefinition(
-            model=model_deployment,
-            instructions=instructions,
-            tools=[tool],
-        ),
+    definition = PromptAgentDefinition(
+        model=model_deployment,
+        instructions=instructions,
+        tools=[tool],
+    )
+    desired_definition = definition.as_dict()
+    try:
+        current_versions = list(
+            project_client.agents.list_versions(
+                AGENT_NAME,
+                limit=1,
+                order="desc",
+            )
+        )
+    except ResourceNotFoundError:
+        current_versions = []
+    reused = bool(
+        current_versions
+        and definition_matches(
+            current_versions[0].as_dict().get("definition", {}),
+            desired_definition,
+        )
+    )
+    agent = (
+        current_versions[0]
+        if reused
+        else project_client.agents.create_version(
+            agent_name=AGENT_NAME,
+            definition=definition,
+        )
     )
     print(
         json.dumps(
@@ -59,6 +106,7 @@ def main() -> None:
                 "id": agent.id,
                 "name": agent.name,
                 "version": agent.version,
+                "reused": reused,
                 "project_endpoint": project_endpoint,
                 "mcp_endpoint": mcp_endpoint,
                 "allowed_tools": ALLOWED_TOOLS,

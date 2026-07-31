@@ -2,7 +2,7 @@
 
 ## Status
 
-Demo Deployment Complete - Azure SQL MCP Validated
+Demo Deployment Complete - Idempotent azd Up Validated
 
 ## Active Demo Profile
 
@@ -88,6 +88,28 @@ East US 2 was selected for Foundry and Container Apps because the subscription h
 6. Re-provision to create the SQL MCP Container App and Foundry RemoteTool connection.
 7. Register and smoke-test `transfer-agent-sql-mcp-demo`.
 8. Provide the public Foundry Playground URL and run the demonstration prompts.
+
+### Idempotent `azd up` hardening
+
+Approved on July 30, 2026:
+
+1. Add root `preup` and `postup` hooks to make `azd up` the complete public-demo workflow.
+2. `preup` must safely create/refresh the active non-secret azd environment, verify Azure context, and install only missing local prerequisites.
+3. The first Bicep pass creates/reconciles base resources while the image-dependent Container App and RemoteTool connection remain conditional.
+4. `postup` must idempotently reconcile the Entra MCP application/role assignment, build only a missing content-addressed DAB image, apply idempotent SQL migrations, run a second Bicep pass, register only a changed/missing agent version, and run smoke tests.
+5. SQL migration may use a temporary Entra-only NSP bootstrap rule only inside a `try/finally`; the prior narrow rule must be restored and confirmed even when migration fails.
+6. Re-running `azd up` at the same Git/config state must not duplicate Entra roles, SQL data, image tags, agent versions, or Azure resources.
+7. Validate hooks independently, run `azd up` against the existing environment, and compare agent/image/resource state before and after a second run.
+
+Validation completed July 30, 2026:
+
+- `azd hooks run preup` passed environment, dependency, Bicep, DAB, SQL, and Python validation.
+- `azd hooks run postup` passed Entra reconciliation, image reuse, idempotent SQL migration, guaranteed NSP restoration, second Bicep reconciliation, agent reuse, Container App health, and all three smoke prompts.
+- Two consecutive `azd up --environment foundry-sql-mcp-demo --no-prompt` runs completed successfully.
+- Both Bicep passes reported no changes on the repeat run.
+- Final content-addressed before/after state was unchanged: 2 agent versions, 10 image tags, 12 Azure resources, and active image `sql-mcp:2.0.9-cac6d92b9c31`.
+- Agent registration explicitly returned `reused: true` for version 2.
+- Image build now hashes the generated `dab-config.json` plus Dockerfile; the second invocation reused `sql-mcp:2.0.9-cac6d92b9c31` instead of building another tag.
 
 ### Live deployment status
 
