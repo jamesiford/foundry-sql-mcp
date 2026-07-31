@@ -1,6 +1,6 @@
 # SQL MCP Public Demo Guide
 
-This guide operates the `demo/public-evaluation` branch. It creates a disposable public Foundry Basic project, Azure SQL Database, and public SQL MCP Server. It does not deploy Foundry IQ or Azure AI Search. See [SQL backend options](sql-backend-options.md) for customer SQL MI and on-premises SQL Server requirements.
+This guide operates the `demo/public-evaluation` branch. It creates a disposable public Foundry Basic project, Azure SQL Database, and public SQL MCP Server. It does not deploy Foundry IQ or Azure AI Search. See the [portal-first public setup](demo-portal-runbook.md) for click-by-click resource configuration and [SQL backend options](sql-backend-options.md) for customer SQL MI and on-premises SQL Server requirements.
 
 ## Safety boundary
 

@@ -221,6 +221,7 @@ This milestone is the minimum viable demonstration.
 Deliver:
 
 - One-command validation script.
+- Portal-first setup runbook with exact resource, identity, networking, and validation steps.
 - Demo operator guide and exact portal links.
 - Demo question set and expected outcomes.
 - Architecture/security disclaimer slide or Markdown brief.

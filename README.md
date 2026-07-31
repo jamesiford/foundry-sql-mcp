@@ -1,7 +1,7 @@
 # Microsoft Foundry agents with Azure SQL Managed Instance
 
 > [!NOTE]
-> On branch `demo/public-evaluation`, the active implementation is a disposable public **SQL MCP-only** demonstration. Foundry IQ is out of scope. See [the demo roadmap](docs/demo-roadmap.md) and [operator guide](docs/demo-guide.md). The secure private architecture remains on `main`.
+> On branch `demo/public-evaluation`, the active implementation is a disposable public **SQL MCP-only** demonstration. Foundry IQ is out of scope. See [the demo roadmap](docs/demo-roadmap.md), [portal-first setup](docs/demo-portal-runbook.md), and [operator guide](docs/demo-guide.md). The secure private architecture remains on `main`.
 
 For production connectivity differences among Azure SQL Database, Azure SQL Managed Instance, and on-premises SQL Server, see [SQL backend options](docs/sql-backend-options.md).
 
