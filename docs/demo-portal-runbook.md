@@ -206,41 +206,185 @@ flowchart LR
 
 **SQL MI is already VNet-resident.** Unlike Azure SQL Database, SQL Managed Instance is always deployed into a delegated subnet and always has a VNet-local endpoint. "Connecting privately" therefore does not mean adding a private endpoint — it means placing the MCP runtime somewhere that can route to the MI subnet, using the VNet-local FQDN on **1433**, and disabling the optional public endpoint on **3342**.
 
-### Subnet requirements
+### What to ask the network team for
 
-| Subnet | Purpose | Minimum size | Notes |
-|---|---|---|---|
-| Container Apps infrastructure | The VNet-injected environment | **/27** for a workload profiles environment, **/23** for the legacy Consumption-only environment | Must be dedicated — no other service may use it |
-| Private endpoints | The ACR private endpoint | /28 is usually sufficient | Can be shared with other private endpoints |
-| SQL MI | The managed instance | Existing | Already delegated to `Microsoft.Sql/managedInstances` |
+The Container Apps and private-endpoint subnets normally sit in customer-managed network space, so
+raise these as one request rather than discovering them step by step.
 
-The Container Apps subnet and the SQL MI subnet may be in the same VNet or in peered VNets. Peered is common when SQL MI already lives in an established network. Confirm routing and DNS resolution across the peering before deploying the container.
-
-### How the numbered steps change
-
-Work through the runbook as written, with these substitutions:
-
-| Step | Change |
+| Ask | Detail |
 |---|---|
-| **3. MCP identity and container registry** | Create the registry at **Premium** tier. After creation, add a private endpoint into the private-endpoint subnet and link the `privatelink.azurecr.io` private DNS zone to the VNet. Keep `AcrPull` on the MCP identity as written. |
-| **4. Container Apps environment** | Create a **VNet-injected** environment on the dedicated subnet instead of a public one. This replaces any public environment already created; it cannot be converted. |
-| **6. Entra-only Azure SQL Database** | Skip. The backend is SQL MI. |
-| **7. Network Security Perimeter** | Skip. NSP is a workaround for public Azure SQL in the reference subscription and does not apply here. |
-| **10. SQL contract and identity** | Follow the **On SQL Managed Instance** subsection: Directory Readers on the server identity, and a server-level Entra login where any view reads across databases. |
-| **11. Container App** | Use the **VNet-local** SQL MI connection string on port 1433. With the registry behind a private endpoint and the environment inside the VNet, the image pull also travels the private path. |
-| **12. Foundry MCP connection** | Unchanged. The endpoint is the Container App FQDN; authentication remains the project managed identity with the `api://<client-id>` audience. |
+| Container Apps infrastructure subnet | **/27 or larger** for a workload profiles environment, **/23 or larger** for the legacy Consumption-only environment. Must be dedicated to Container Apps — no other service may use it |
+| Subnet delegation | Workload profiles environments require the subnet delegated to `Microsoft.App/environments`. Consumption-only environments must **not** be delegated |
+| Private-endpoint subnet | /28 is usually sufficient. May be shared with other private endpoints |
+| Routing to SQL MI | Same VNet as the managed instance, or a peering with routing confirmed in both directions |
+| DNS | Confirm whether the VNet uses Azure-provided DNS or custom DNS servers. Custom DNS needs conditional forwarders for the private zones below |
+| Private DNS zones | `privatelink.azurecr.io` linked to the VNet |
+
+SQL MI needs no private endpoint. It is already deployed into a delegated subnet and always has a
+VNet-local endpoint; reaching it privately is a routing question, not a Private Link question.
+
+### Order of operations
+
+Two constraints dictate the sequence, and getting it wrong means redoing work.
+
+> [!WARNING]
+> **Build and push the image before you lock the registry down.** Microsoft documents that
+> "if you disable public access to a registry, `az acr build` commands no longer work" — ACR Tasks
+> require public IPs unless you assign a dedicated agent pool or allowlist the regional
+> `AzureContainerRegistry` service tag. Build first, verify the image exists, then disable public
+> network access.
+
+> [!WARNING]
+> **A new registry means a new image.** The image lives in the registry, so creating a Premium
+> registry means rebuilding and pushing into it. Re-run step 9's build against the new registry name
+> before creating the Container App.
+
+1. Network team provisions the subnets, delegation, peering and DNS zones
+2. Create the Premium registry with public access still enabled
+3. Build and push the image (step 9) into the new registry
+4. Add the registry private endpoint and DNS records
+5. Disable public network access on the registry
+6. Create the VNet-injected Container Apps environment
+7. Apply the SQL contract on SQL MI (step 10)
+8. Create the Container App (step 11) with the VNet-local connection string
+9. Disable the SQL MI public endpoint
+10. Create the Foundry connection and agent (steps 12–13), unchanged
+11. Decommission the old public environment, container app and registry
+
+### Executable steps
+
+Set the shared variables once:
+
+```powershell
+$rg          = '<resource-group>'
+$location    = '<region>'
+$vnetName    = '<vnet-name>'
+$acaSubnet   = '<container-apps-subnet-name>'
+$peSubnet    = '<private-endpoint-subnet-name>'
+$acrName     = '<new-premium-registry-name>'
+$envName     = '<new-vnet-environment-name>'
+$appName     = '<container-app-name>'
+$identityName= '<mcp-uami-name>'
+
+$identityId   = az identity show --name $identityName --resource-group $rg --query id -o tsv
+$identityPrin = az identity show --name $identityName --resource-group $rg --query principalId -o tsv
+```
+
+**1. Premium registry, public access still enabled**
+
+```powershell
+az acr create --name $acrName --resource-group $rg --location $location --sku Premium
+az acr config authentication-as-arm update -r $acrName --status enabled
+
+$acrId = az acr show --name $acrName --query id -o tsv
+az role assignment create --assignee-object-id $identityPrin `
+  --assignee-principal-type ServicePrincipal --role AcrPull --scope $acrId
+```
+
+**2. Build the image into the new registry** — this is step 9's build, re-pointed. Do it now, while
+the registry is still publicly reachable.
+
+```powershell
+./scripts/build-demo-mcp.ps1 -RegistryName $acrName `
+  -McpApplicationId <mcp-app-client-id> -TenantId <tenant-id>
+
+az acr repository show-tags --name $acrName --repository sql-mcp -o table   # confirm it landed
+```
+
+**3. Registry private endpoint and DNS**
+
+```powershell
+az network private-endpoint create `
+  --name "pe-$acrName" --resource-group $rg `
+  --vnet-name $vnetName --subnet $peSubnet `
+  --private-connection-resource-id $acrId `
+  --group-ids registry --connection-name "conn-$acrName"
+
+az network private-dns zone create --resource-group $rg --name 'privatelink.azurecr.io'
+az network private-dns link vnet create --resource-group $rg `
+  --zone-name 'privatelink.azurecr.io' --name "link-$vnetName" `
+  --virtual-network $vnetName --registration-enabled false
+
+az network private-endpoint dns-zone-group create `
+  --resource-group $rg --endpoint-name "pe-$acrName" `
+  --name 'default' --private-dns-zone 'privatelink.azurecr.io' --zone-name 'acr'
+```
+
+> [!IMPORTANT]
+> **A private endpoint needs more than one DNS record.** Configuring a private endpoint automatically
+> enables *dedicated data endpoints*, so the zone needs an entry for the registry itself
+> (`<registry>.azurecr.io`) **and** one per region for the data endpoint
+> (`<registry>.<region>.data.azurecr.io`). Using the `dns-zone-group` command above creates all of
+> them. Creating records by hand and missing the data endpoint produces image pulls that authenticate
+> and then hang.
+
+**4. Lock the registry down** — only after the image is pushed:
+
+```powershell
+az acr update --name $acrName --public-network-enabled false
+```
+
+**5. VNet-injected Container Apps environment**
+
+```powershell
+# Workload profiles environments require delegation. Consumption-only must NOT be delegated.
+az network vnet subnet update --resource-group $rg --vnet-name $vnetName `
+  --name $acaSubnet --delegations Microsoft.App/environments
+
+$acaSubnetId = az network vnet subnet show --resource-group $rg `
+  --vnet-name $vnetName --name $acaSubnet --query id -o tsv
+
+az containerapp env create --name $envName --resource-group $rg --location $location `
+  --infrastructure-subnet-resource-id $acaSubnetId --enable-workload-profiles
+```
+
+Add `--internal-only true` if the MCP endpoint itself should not be reachable from the internet. Only
+do this if Foundry can reach it privately — with a public Foundry project, the endpoint must remain
+externally reachable and is protected by the Entra token, not by the network.
+
+**6. Container App** — as step 11, on the new environment, with the VNet-local SQL MI connection
+string on port 1433:
+
+```powershell
+az containerapp create --name $appName --resource-group $rg --environment $envName `
+  --user-assigned $identityId --registry-identity $identityId `
+  --registry-server "$acrName.azurecr.io" `
+  --image "$acrName.azurecr.io/sql-mcp:<tag>" `
+  --target-port 5000 --ingress external --transport http `
+  --cpu 0.5 --memory 1.0Gi --min-replicas 1 --max-replicas 1 `
+  --env-vars "DAB_ENVIRONMENT=Production" "DATABASE_CONNECTION_STRING=<vnet-local string>"
+```
+
+**7. Close the public SQL path** once the container is healthy — in **SQL managed instance >
+Networking**, disable the public endpoint.
 
 ### Validation for this topology
 
-Prove the private path deliberately, in this order. Each check isolates one layer.
+Prove the private path deliberately, in this order. Each check isolates one layer, so the first
+failure tells you where to look.
 
-1. **DNS from inside the VNet** — `<registry>.azurecr.io` resolves to a private address, and the SQL MI VNet-local FQDN resolves to its subnet address.
-2. **Image pull** — the Container App revision pulls from the Premium registry with no public registry access enabled.
-3. **SQL reachability** — the container connects on 1433 using the VNet-local FQDN.
-4. **Public path is closed** — the SQL MI public endpoint on 3342 is disabled, and connecting to the `.public.` FQDN fails.
-5. **Foundry still works** — the agent lists tools and answers, proving the public Foundry-to-MCP hop is unaffected by the network changes.
+| # | Check | How | Expected |
+|---|---|---|---|
+| 1 | Registry DNS resolves privately | `nslookup $acrName.azurecr.io` from a VM in the VNet | A private address in the private-endpoint subnet, not a public one |
+| 2 | Data endpoint resolves | `nslookup $acrName.<region>.data.azurecr.io` | Also private — a common miss |
+| 3 | Image pull works | Container App revision provisions | Healthy revision with public registry access disabled |
+| 4 | SQL reachable privately | Container logs show a successful connection | Connected on 1433 via the VNet-local FQDN |
+| 5 | **Public SQL path is closed** | Connect to the `.public.` FQDN on 3342 | Fails |
+| 6 | **Foundry still works** | Agent lists tools and answers a question | Works, over the public internet, authenticated by Entra |
 
-Checks 4 and 5 matter most. Together they demonstrate that the data path is private while the control path still functions — which is the claim this topology exists to support.
+Checks 5 and 6 matter most. Together they demonstrate that the data path is private while the control
+path still functions — which is the claim this topology exists to support, and the evidence a security
+reviewer will ask for.
+
+### Known failure modes in this topology
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `az acr build` fails or hangs | Public network access already disabled on the registry | Build before locking down, or assign a dedicated agent pool / allowlist the `AzureContainerRegistry` service tag |
+| Image pull authenticates then hangs | Data endpoint DNS record missing | Use the `dns-zone-group` command so all records are created |
+| Environment creation fails on the subnet | Subnet too small, not dedicated, or delegation wrong for the environment type | /27+ and delegated for workload profiles; /23+ and not delegated for Consumption-only |
+| Container starts but cannot reach SQL | Peering or DNS not resolving the MI VNet-local FQDN | Verify from a VM in the same subnet before blaming the container |
+| Agent gets a 401 | Audience or tenant placeholder not substituted at build time | Rebuild with the real values — unrelated to networking |
 
 ## Required access
 
