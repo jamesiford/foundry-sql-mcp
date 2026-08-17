@@ -167,6 +167,81 @@ flowchart LR
 
 The split regions are deliberate. This subscription rejects new Azure SQL logical servers in East US 2, while Central US previously had Container Apps capacity pressure.
 
+## Private topology variant — VNet-injected Container Apps with private ACR and SQL MI
+
+The numbered steps below build the **public evaluation topology**: a public Container Apps environment reaching a public Azure SQL Database. That is correct for a disposable demo and wrong for a customer whose database must not be reachable from the internet.
+
+This section defines the **hybrid variant** used when the database is Azure SQL Managed Instance and must be reached privately. Everything Foundry-side stays public; everything data-side moves inside the virtual network.
+
+```mermaid
+flowchart LR
+    User[Foundry Playground user] --> Foundry[Public Foundry project]
+    Foundry --> Agent[SQL MCP prompt agent]
+    Agent -->|Project MI + Entra token over public internet| MCP[DAB SQL MCP Container App]
+    subgraph VNet[Customer virtual network]
+      MCP -->|UAMI + TLS 1433, VNet-local FQDN| SQLMI[(Azure SQL Managed Instance)]
+      MCP -->|AcrPull over private endpoint| ACR[Premium ACR]
+    end
+```
+
+### What moves, and what does not
+
+| Component | Public evaluation | Private variant | Recreate? |
+|---|---|---|---|
+| Foundry resource, project, model | Public | **Unchanged — stays public** | No |
+| Foundry → MCP security | Entra token, `Mcp.Invoke` | **Unchanged** — the boundary is authentication, not the network | No |
+| Container Apps environment | Public, non-VNet | **VNet-injected**, dedicated subnet | **Yes** — VNet config is fixed at creation |
+| Container registry | Basic/Standard, public | **Premium** with a private endpoint | **Yes** — private endpoints require Premium |
+| SQL backend | Public Azure SQL Database | **SQL MI, VNet-local endpoint only** | No |
+| SQL public endpoint (3342) | n/a | **Disabled** | — |
+
+> [!IMPORTANT]
+> **Foundry does not move into the VNet, and does not need to.** Agent Service calls the MCP endpoint over the public internet and presents an Entra token carrying `Mcp.Invoke`, which DAB validates against the configured audience and issuer. That token is the trust boundary between Foundry and MCP. Network isolation protects the path from MCP to the data, which is where the customer's data actually sits.
+
+### Why each change is required
+
+**The Container Apps environment must be recreated, not reconfigured.** VNet configuration is fixed when an environment is created. A public environment also has no stable outbound address — outbound IPs may change over time, and pinning them behind a NAT Gateway is supported only in a workload profile environment. Once the environment is VNet-injected, source-IP allowlisting stops being a problem: the source becomes a **subnet CIDR** you control.
+
+**The registry must be Premium.** Private endpoints for Azure Container Registry are a Premium-tier feature. Basic and Standard registries cannot have one, so a registry created at a lower tier has to be replaced rather than upgraded in place for this purpose. The private endpoint uses the `privatelink.azurecr.io` DNS zone.
+
+**SQL MI is already VNet-resident.** Unlike Azure SQL Database, SQL Managed Instance is always deployed into a delegated subnet and always has a VNet-local endpoint. "Connecting privately" therefore does not mean adding a private endpoint — it means placing the MCP runtime somewhere that can route to the MI subnet, using the VNet-local FQDN on **1433**, and disabling the optional public endpoint on **3342**.
+
+### Subnet requirements
+
+| Subnet | Purpose | Minimum size | Notes |
+|---|---|---|---|
+| Container Apps infrastructure | The VNet-injected environment | **/27** for a workload profiles environment, **/23** for the legacy Consumption-only environment | Must be dedicated — no other service may use it |
+| Private endpoints | The ACR private endpoint | /28 is usually sufficient | Can be shared with other private endpoints |
+| SQL MI | The managed instance | Existing | Already delegated to `Microsoft.Sql/managedInstances` |
+
+The Container Apps subnet and the SQL MI subnet may be in the same VNet or in peered VNets. Peered is common when SQL MI already lives in an established network. Confirm routing and DNS resolution across the peering before deploying the container.
+
+### How the numbered steps change
+
+Work through the runbook as written, with these substitutions:
+
+| Step | Change |
+|---|---|
+| **3. MCP identity and container registry** | Create the registry at **Premium** tier. After creation, add a private endpoint into the private-endpoint subnet and link the `privatelink.azurecr.io` private DNS zone to the VNet. Keep `AcrPull` on the MCP identity as written. |
+| **4. Container Apps environment** | Create a **VNet-injected** environment on the dedicated subnet instead of a public one. This replaces any public environment already created; it cannot be converted. |
+| **6. Entra-only Azure SQL Database** | Skip. The backend is SQL MI. |
+| **7. Network Security Perimeter** | Skip. NSP is a workaround for public Azure SQL in the reference subscription and does not apply here. |
+| **10. SQL contract and identity** | Follow the **On SQL Managed Instance** subsection: Directory Readers on the server identity, and a server-level Entra login where any view reads across databases. |
+| **11. Container App** | Use the **VNet-local** SQL MI connection string on port 1433. With the registry behind a private endpoint and the environment inside the VNet, the image pull also travels the private path. |
+| **12. Foundry MCP connection** | Unchanged. The endpoint is the Container App FQDN; authentication remains the project managed identity with the `api://<client-id>` audience. |
+
+### Validation for this topology
+
+Prove the private path deliberately, in this order. Each check isolates one layer.
+
+1. **DNS from inside the VNet** — `<registry>.azurecr.io` resolves to a private address, and the SQL MI VNet-local FQDN resolves to its subnet address.
+2. **Image pull** — the Container App revision pulls from the Premium registry with no public registry access enabled.
+3. **SQL reachability** — the container connects on 1433 using the VNet-local FQDN.
+4. **Public path is closed** — the SQL MI public endpoint on 3342 is disabled, and connecting to the `.public.` FQDN fails.
+5. **Foundry still works** — the agent lists tools and answers, proving the public Foundry-to-MCP hop is unaffected by the network changes.
+
+Checks 4 and 5 matter most. Together they demonstrate that the data path is private while the control path still functions — which is the claim this topology exists to support.
+
 ## Required access
 
 Use separate privileged and runtime identities. The setup operator needs enough temporary access to create resources, role assignments, an Entra application, and the SQL Entra administrator. Runtime identities must not receive `Owner`, `Contributor`, `db_owner`, `db_datareader`, or `db_datawriter`.
@@ -261,6 +336,9 @@ In **Azure portal > Container registries > Create**:
 
 Do not grant the MCP identity `Contributor` on the registry or resource group.
 
+> [!NOTE]
+> **Private variant:** create the registry at **Premium** tier instead. Private endpoints are a Premium-tier feature, so a Basic or Standard registry must be replaced rather than upgraded for this purpose. After creation, add a private endpoint into the private-endpoint subnet and link the `privatelink.azurecr.io` private DNS zone to the VNet. See [Private topology variant](#private-topology-variant--vnet-injected-container-apps-with-private-acr-and-sql-mi).
+
 ## 4. Create the public Container Apps environment
 
 **What it is:** A Container Apps environment is the shared hosting, logging, revision, and networking boundary in which the SQL MCP Container App runs.
@@ -279,7 +357,7 @@ In **Azure portal > Container Apps Environments > Create**:
 > [!WARNING]
 > **This choice is fixed at creation and cannot be changed later.** A public, non-VNet environment is correct for this disposable demo, which reaches a public Azure SQL Database. It is the wrong starting point if you are targeting SQL Managed Instance or any database that requires source-IP allowlisting, because a public environment has **no stable outbound address** — outbound IPs may change over time, and pinning them behind a NAT Gateway is supported only in a workload profile environment.
 >
-> For SQL MI and other private backends, create a **VNet-integrated** environment in a subnet routable to the database instead, and allowlist the subnet CIDR. Converting later means deleting and recreating the environment and redeploying the container. Decide before step 11, not after.
+> **Private variant:** create a **VNet-injected** environment on a dedicated subnet — **/27** or larger for a workload profiles environment, **/23** or larger for the legacy Consumption-only environment — in the same VNet as SQL MI or one peered to it. The source then becomes a subnet CIDR you control rather than a set of moving public IPs. Converting later means deleting and recreating the environment and redeploying the container, so decide before step 11. See [Private topology variant](#private-topology-variant--vnet-injected-container-apps-with-private-acr-and-sql-mi).
 
 ## 5. Create the Foundry resource, project, and model
 
@@ -808,7 +886,7 @@ Set `DAB_ENVIRONMENT=Production` and `DATABASE_CONNECTION_STRING` as a **non-sec
 Server=tcp:<sql-server>.database.windows.net,1433;Initial Catalog=TransferDemo;Authentication=Active Directory Managed Identity;User Id=<mcp-uami-client-id>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
 ```
 
-**SQL Managed Instance, VNet-local endpoint (recommended for customers):**
+**SQL Managed Instance, VNet-local endpoint (required for the private topology variant):**
 
 ```text
 Server=tcp:<mi-name>.<dns-zone>.database.windows.net,1433;Initial Catalog=<database>;Authentication=Active Directory Managed Identity;User Id=<mcp-uami-client-id>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
@@ -838,7 +916,7 @@ The container resolves every configured entity against the database during start
 | Missing primary key | No field marked `primary-key` on an entity | Mark exactly one field per entity |
 
 > [!WARNING]
-> **A public Container Apps environment has no stable outbound IP.** The address shown on the environment's Overview page is the *inbound* IP and cannot be used in a firewall or NSG rule. Microsoft documents that outbound IPs "might change over time", and pinning them behind a NAT Gateway is supported [only in a workload profile environment](https://learn.microsoft.com/azure/container-apps/networking). If SQL is reached across a network boundary that requires source allowlisting, use a VNet-integrated environment and allowlist the subnet CIDR. Opening a rule to `Any` is not an acceptable resolution.
+> **A public Container Apps environment has no stable outbound IP.** The address shown on the environment's Overview page is the *inbound* IP and cannot be used in a firewall or NSG rule. Microsoft documents that outbound IPs "might change over time", and pinning them behind a NAT Gateway is supported [only in a workload profile environment](https://learn.microsoft.com/azure/container-apps/networking). If SQL is reached across a network boundary that requires source allowlisting, use a VNet-injected environment and allowlist the subnet CIDR — see [Private topology variant](#private-topology-variant--vnet-injected-container-apps-with-private-acr-and-sql-mi). Opening a rule to `Any` is not an acceptable resolution.
 
 ## 12. Create the Foundry MCP project connection
 
