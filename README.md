@@ -734,6 +734,8 @@ Additional design detail:
 - [Architecture](docs/architecture.md)
 - [Security model](docs/security.md)
 - [SQL MCP contract](docs/sql-mcp.md)
+- [Configuring SQL MCP Server for your own databases](docs/configure-for-your-database.md)
+- [SQL backend options](docs/sql-backend-options.md)
 - [Foundry IQ contract](docs/foundry-iq.md)
 - [ADR-001: Foundry SQL agent architecture](docs/decisions/ADR-001-foundry-sql-agent-architecture.md)
 - [ADR-002: two prompt agents and connectivity](docs/decisions/ADR-002-two-prompt-agents-and-connectivity.md)

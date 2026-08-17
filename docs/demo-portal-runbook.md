@@ -276,6 +276,11 @@ In **Azure portal > Container Apps Environments > Create**:
 3. Connect it to the demo Log Analytics workspace.
 4. Do not create a workload Container App yet; its image and SQL authorization are prepared in later steps.
 
+> [!WARNING]
+> **This choice is fixed at creation and cannot be changed later.** A public, non-VNet environment is correct for this disposable demo, which reaches a public Azure SQL Database. It is the wrong starting point if you are targeting SQL Managed Instance or any database that requires source-IP allowlisting, because a public environment has **no stable outbound address** — outbound IPs may change over time, and pinning them behind a NAT Gateway is supported only in a workload profile environment.
+>
+> For SQL MI and other private backends, create a **VNet-integrated** environment in a subnet routable to the database instead, and allowlist the subnet CIDR. Converting later means deleting and recreating the environment and redeploying the container. Decide before step 11, not after.
+
 ## 5. Create the Foundry resource, project, and model
 
 **What they are:** The Foundry resource is the account-level Azure boundary; the project owns agents/connections and has its own identity; the model deployment supplies inference capacity.
@@ -401,6 +406,12 @@ Foundry sends a tenant-v2 token containing `Mcp.Invoke`. The project connection 
 **Why it is needed:** Foundry doesn't query SQL directly. DAB provides the deterministic entity abstraction, JWT validation, RBAC, structured SQL generation, field metadata, and MCP protocol endpoint between the agent and database.
 
 **How to configure it:** Treat `dab-config.json` as the server's public data contract: it controls the database connection, authentication, MCP tools, exposed objects, field metadata, and permitted operations.
+
+> [!TIP]
+> **There is no server code in this solution.** The `Dockerfile` is two lines: it pins the Microsoft-published Data API builder image and copies `dab-config.json` into it. Configuring SQL MCP Server means editing JSON, not writing or compiling an application.
+
+> [!NOTE]
+> **Adapting this to your own database.** The sections below describe the committed demo contract over synthetic data. If you are pointing SQL MCP Server at your own schema, see [Configuring SQL MCP Server for your own databases](configure-for-your-database.md) — it covers choosing which objects to expose, building curated views, granting least privilege, and writing the entity and field descriptions that determine answer quality. The `dab` CLI (`dab add`, `dab update`) generates and validates these entries, which is less error-prone than editing the file by hand.
 
 ### Pin the schema and database provider
 
@@ -644,33 +655,190 @@ Azure SQL Database creates the MCP contained user from the UAMI client-ID SID an
 - The MCP identity belongs only to `mcp_reader`.
 - Raw tables and writes remain denied.
 
+Verify rather than assume:
+
+```sql
+-- Every object mcp_reader can reach
+SELECT s.name AS [schema], o.name AS [object], p.permission_name, p.state_desc
+FROM sys.database_permissions AS p
+JOIN sys.database_principals AS dp ON dp.principal_id = p.grantee_principal_id
+JOIN sys.objects AS o ON o.object_id = p.major_id
+JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+WHERE dp.name = N'mcp_reader'
+ORDER BY s.name, o.name;
+
+-- Role membership
+SELECT rp.name AS role_name, mp.name AS member_name
+FROM sys.database_role_members AS drm
+JOIN sys.database_principals AS rp ON rp.principal_id = drm.role_principal_id
+JOIN sys.database_principals AS mp ON mp.principal_id = drm.member_principal_id
+WHERE rp.name = N'mcp_reader';
+```
+
+### On SQL Managed Instance
+
+> [!IMPORTANT]
+> `004_security.sql` uses `CREATE USER ... WITH SID = ..., TYPE = E`, which is **Azure SQL Database only**. It fails on SQL Managed Instance. Do not run `deploy-demo-database.ps1` unmodified against SQL MI.
+
+SQL MI resolves Entra principals through the directory rather than from a supplied SID, so the server identity must first hold the Entra **Directory Readers** role. This is a directory role, not an Azure resource role — it must be granted by a Privileged Role Administrator or Global Administrator, and typically follows a slower approval path than Azure RBAC. Grant it before you need it.
+
+**Single-database views.** A contained user is sufficient:
+
+```sql
+USE [<database>];
+GO
+CREATE USER [<mcp-uami-name>] FROM EXTERNAL PROVIDER;
+
+IF DATABASE_PRINCIPAL_ID(N'mcp_reader') IS NULL
+    CREATE ROLE [mcp_reader] AUTHORIZATION [dbo];
+
+ALTER ROLE [mcp_reader] ADD MEMBER [<mcp-uami-name>];
+GO
+```
+
+**Views that read across databases.** A contained user has no server-level principal behind it, so the caller cannot be resolved in the second database. Startup fails with:
+
+```text
+The server principal "<client-id>@<tenant-id>" is not able to access
+the database "<other-database>" under the current security context
+```
+
+Creating a second contained user in the other database does not help — they are two unrelated principals, not one identity seen from both. SQL MI supports server-level Entra logins for exactly this case:
+
+```sql
+-- Once, at the instance level
+USE master;
+GO
+CREATE LOGIN [<mcp-uami-name>] FROM EXTERNAL PROVIDER;
+GO
+
+-- Then in EVERY database the view touches
+USE [<database>];
+GO
+DROP USER IF EXISTS [<mcp-uami-name>];          -- an existing contained user blocks the login-backed one
+CREATE USER [<mcp-uami-name>] FROM LOGIN [<mcp-uami-name>];
+
+IF DATABASE_PRINCIPAL_ID(N'mcp_reader') IS NULL
+    CREATE ROLE [mcp_reader] AUTHORIZATION [dbo];
+
+ALTER ROLE [mcp_reader] ADD MEMBER [<mcp-uami-name>];
+GO
+```
+
+The role, its membership, and every `GRANT` are per-database and must exist in each database involved. A server-level login is a broader principal than a contained user, but it grants nothing by itself — every effective permission still comes from named-object grants through `mcp_reader`.
+
+Where you have the choice, prefer keeping each agent-facing view inside a single database. See [SQL Backend Options](sql-backend-options.md#azure-sql-managed-instance-customer-pattern).
+
 ## 11. Create the SQL MCP Container App
 
-**What it is:** This is the running instance of the configured DAB image, with an external HTTPS endpoint and the MCP UAMI attached.
+**What it is:** This is the running instance of the configured DAB image, with an HTTPS endpoint and the MCP UAMI attached.
 
 **Why it is needed:** Foundry requires a remote HTTP MCP endpoint. The app also supplies the managed-identity SQL connection string and pulls the pinned image from ACR.
 
 **How to configure it:**
 
-In **Azure portal > Container Apps > Create**:
+> [!IMPORTANT]
+> **Two prerequisites before you start.** The portal's *Create Container App* flow cannot select an ACR image with managed-identity authentication in a single pass, and will report `Cannot access ACR '<registry>.azurecr.io' because admin credentials on the ACR are disabled`. Do not enable the ACR admin user to work around this. Complete both prerequisites below and use one of the two supported paths instead.
 
-1. Select the existing public environment in East US 2.
-2. Name the app `app-sql-mcp-demo-<suffix>`.
-3. Assign user identity `id-mcp-foundry-sql-mcp-demo`.
-4. Select the ACR image produced in the previous step.
-5. Configure ACR authentication with the same user-assigned identity.
-6. Set CPU to `0.5`, memory to `1 GiB`, minimum replicas to `1`, and maximum replicas to `1`.
-7. Enable external HTTPS ingress on target port `5000`; do not allow insecure HTTP.
-8. Add environment variable `DAB_ENVIRONMENT=Production`.
-9. Add non-secret environment variable `DATABASE_CONNECTION_STRING`:
+**Prerequisite 1 — allow ARM audience tokens on the registry.** Managed-identity image pull requires this and it is not enabled on every registry:
+
+```powershell
+az acr config authentication-as-arm show -r $values.AZURE_CONTAINER_REGISTRY_NAME
+az acr config authentication-as-arm update -r $values.AZURE_CONTAINER_REGISTRY_NAME --status enabled
+```
+
+**Prerequisite 2 — grant the MCP identity `AcrPull` on the registry:**
+
+```powershell
+$identityPrincipalId = az identity show `
+  --name $values.AZURE_MCP_IDENTITY_NAME `
+  --resource-group $values.AZURE_RESOURCE_GROUP `
+  --query principalId -o tsv
+
+$registryId = az acr show --name $values.AZURE_CONTAINER_REGISTRY_NAME --query id -o tsv
+
+az role assignment create `
+  --assignee-object-id $identityPrincipalId `
+  --assignee-principal-type ServicePrincipal `
+  --role AcrPull `
+  --scope $registryId
+```
+
+### Path A — CLI, single command (recommended)
+
+The CLI creates the app with managed-identity registry authentication in one step. The portal cannot.
+
+```powershell
+$identityId = az identity show `
+  --name $values.AZURE_MCP_IDENTITY_NAME `
+  --resource-group $values.AZURE_RESOURCE_GROUP `
+  --query id -o tsv
+
+az containerapp create `
+  --name "app-sql-mcp-demo-<suffix>" `
+  --resource-group $values.AZURE_RESOURCE_GROUP `
+  --environment $values.AZURE_CONTAINER_APPS_ENVIRONMENT_NAME `
+  --user-assigned $identityId `
+  --registry-identity $identityId `
+  --registry-server "$($values.AZURE_CONTAINER_REGISTRY_NAME).azurecr.io" `
+  --image $values.MCP_CONTAINER_IMAGE `
+  --target-port 5000 `
+  --ingress external `
+  --transport http `
+  --cpu 0.5 --memory 1.0Gi `
+  --min-replicas 1 --max-replicas 1 `
+  --env-vars "DAB_ENVIRONMENT=Production" "DATABASE_CONNECTION_STRING=<see below>"
+```
+
+### Path B — portal, three passes
+
+If the portal is required, follow Microsoft's documented sequence for [managed-identity image pull](https://learn.microsoft.com/azure/container-apps/managed-identity-image-pull). You cannot do this in one pass.
+
+1. **Create** the app on the existing environment using the public quickstart image `mcr.microsoft.com/k8se/quickstart:latest`, external HTTPS ingress, target port `5000`, CPU `0.5`, memory `1 GiB`, min and max replicas `1`.
+2. **Identity > User assigned > Add** — attach `id-mcp-foundry-sql-mcp-demo`.
+3. **Revision management > Create new revision** — set *Image source* to **Azure Container Registry**, *Authentication* to **Managed Identity**, and select the identity. With admin credentials disabled the portal shows a warning and does not populate the image list; **type the image name and tag manually**. Add the two environment variables below, then create the revision.
+
+### Environment variables
+
+Set `DAB_ENVIRONMENT=Production` and `DATABASE_CONNECTION_STRING` as a **non-secret** variable. The connection string differs by backend — the hostname and port must match each other:
+
+**Azure SQL Database:**
 
 ```text
 Server=tcp:<sql-server>.database.windows.net,1433;Initial Catalog=TransferDemo;Authentication=Active Directory Managed Identity;User Id=<mcp-uami-client-id>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
 ```
 
-10. Deploy and wait for the revision to become healthy.
+**SQL Managed Instance, VNet-local endpoint (recommended for customers):**
+
+```text
+Server=tcp:<mi-name>.<dns-zone>.database.windows.net,1433;Initial Catalog=<database>;Authentication=Active Directory Managed Identity;User Id=<mcp-uami-client-id>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
+```
+
+**SQL Managed Instance, public endpoint (only if explicitly enabled):**
+
+```text
+Server=tcp:<mi-name>.public.<dns-zone>.database.windows.net,3342;Initial Catalog=<database>;Authentication=Active Directory Managed Identity;User Id=<mcp-uami-client-id>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
+```
+
+Note the `.public.` infix — the public endpoint differs by hostname as well as port. Mixing the private FQDN with `3342`, or the public FQDN with `1433`, produces a generic connection failure that is easily mistaken for an identity problem.
 
 Do not add SQL passwords, registry passwords, or secrets to the Container App.
+
+### If the revision will not reach a healthy state
+
+The container resolves every configured entity against the database during startup, so the first thirty seconds of log output identify the layer at fault. Read the revision's console logs before changing anything.
+
+| Log message | Cause | Fix |
+|---|---|---|
+| `Cannot access ACR ... admin credentials ... are disabled` | Registry authentication was set to *Secrets* | Use Path A or Path B; confirm both prerequisites above |
+| Connection timeout, or no route to host | Network path blocked between the Container Apps environment and SQL | See the note below |
+| `Login failed for user '<token-identified principal>'` | Identity is not a database user, or not in `mcp_reader` | Re-check step 10; on SQL MI confirm Directory Readers |
+| `The server principal ... is not able to access the database ...` | A view crosses databases and the identity is a contained user | SQL MI needs a server-level login — see step 10 |
+| `Cannot obtain schema for entity ...` | Object missing, renamed, or not granted | Verify the object exists and `mcp_reader` holds the grant |
+| Missing primary key | No field marked `primary-key` on an entity | Mark exactly one field per entity |
+
+> [!WARNING]
+> **A public Container Apps environment has no stable outbound IP.** The address shown on the environment's Overview page is the *inbound* IP and cannot be used in a firewall or NSG rule. Microsoft documents that outbound IPs "might change over time", and pinning them behind a NAT Gateway is supported [only in a workload profile environment](https://learn.microsoft.com/azure/container-apps/networking). If SQL is reached across a network boundary that requires source allowlisting, use a VNet-integrated environment and allowlist the subnet CIDR. Opening a rule to `Any` is not an acceptable resolution.
 
 ## 12. Create the Foundry MCP project connection
 
