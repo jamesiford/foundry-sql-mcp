@@ -240,15 +240,34 @@ peering, route tables or NSG rules are required for the container to reach SQL M
 > **Permissions.** You need `Network Contributor` on the virtual network, or a role that allows
 > creating subnets, delegations, private DNS zones and virtual network links.
 
-Set the variables used throughout:
+### Variables used throughout this section
+
+Set these once. Every command below uses them, so a value entered here does not need repeating.
+
+> [!IMPORTANT]
+> **`$rg` and `$vnetRg` are frequently different.** The virtual network hosting SQL MI often lives in
+> a network resource group rather than the application resource group. Commands that act on the
+> network use `$vnetRg`; commands that act on application resources use `$rg`. Setting both to the
+> same value when they differ is the most common cause of `ResourceNotFound` in this section.
 
 ```powershell
-$rg          = '<resource-group>'
-$location    = '<region>'
-$vnetRg      = '<vnet-resource-group>'      # often differs from the app resource group
-$vnetName    = '<vnet-hosting-sql-mi>'
-$acaSubnet   = 'snet-aca-mcp'
-$peSubnet    = 'snet-private-endpoints'
+# Application resources
+$rg           = '<app-resource-group>'
+$location     = '<region>'
+$acrName      = '<new-premium-registry-name>'
+$envName      = '<new-vnet-environment-name>'
+$appName      = '<container-app-name>'
+$identityName = '<mcp-uami-name>'
+
+# Network resources
+$vnetRg       = '<vnet-resource-group>'     # the RG containing the SQL MI virtual network
+$vnetName     = '<vnet-hosting-sql-mi>'
+$acaSubnet    = 'snet-aca-mcp'
+$peSubnet     = 'snet-private-endpoints'
+
+# Resolved once and reused
+$identityId   = az identity show --name $identityName --resource-group $rg --query id -o tsv
+$identityPrin = az identity show --name $identityName --resource-group $rg --query principalId -o tsv
 ```
 
 **1. Inspect the SQL MI virtual network and find free address space**
@@ -382,6 +401,12 @@ Verify name resolution of the SQL MI VNet-local FQDN from the Container Apps sub
 the container. Peered networks route by default, but custom DNS or a firewall appliance in the path
 can still break resolution.
 
+> [!NOTE]
+> **If you take this path, adjust the variables.** The Container Apps and private-endpoint subnets
+> are then created in the new virtual network rather than the SQL MI one. Point `$vnetName` at the
+> new network and `$vnetRg` at its resource group before running the subnet commands above, and keep
+> a separate variable for the SQL MI network so the peering commands still resolve it.
+
 ### Order of operations
 
 Two constraints dictate the sequence, and getting it wrong means redoing work.
@@ -412,22 +437,9 @@ Two constraints dictate the sequence, and getting it wrong means redoing work.
 
 ### Executable steps
 
-Set the shared variables once:
-
-```powershell
-$rg          = '<resource-group>'
-$location    = '<region>'
-$vnetName    = '<vnet-name>'
-$acaSubnet   = '<container-apps-subnet-name>'
-$peSubnet    = '<private-endpoint-subnet-name>'
-$acrName     = '<new-premium-registry-name>'
-$envName     = '<new-vnet-environment-name>'
-$appName     = '<container-app-name>'
-$identityName= '<mcp-uami-name>'
-
-$identityId   = az identity show --name $identityName --resource-group $rg --query id -o tsv
-$identityPrin = az identity show --name $identityName --resource-group $rg --query principalId -o tsv
-```
+These continue from **Provision the network** above and reuse the same variables. The subnets,
+delegation, DNS zone and virtual network link already exist by this point — nothing below recreates
+them.
 
 **1. Premium registry, public access still enabled**
 
@@ -450,23 +462,26 @@ the registry is still publicly reachable.
 az acr repository show-tags --name $acrName --repository sql-mcp -o table   # confirm it landed
 ```
 
-**3. Registry private endpoint and DNS**
+**3. Registry private endpoint and DNS records**
+
+The zone and the virtual network link were created in **Provision the network**. This step creates
+the endpoint and populates the zone with its records.
 
 ```powershell
+# The endpoint is created in the network resource group, into the subnet built earlier
 az network private-endpoint create `
-  --name "pe-$acrName" --resource-group $rg `
+  --name "pe-$acrName" --resource-group $vnetRg `
   --vnet-name $vnetName --subnet $peSubnet `
   --private-connection-resource-id $acrId `
   --group-ids registry --connection-name "conn-$acrName"
 
-az network private-dns zone create --resource-group $rg --name 'privatelink.azurecr.io'
-az network private-dns link vnet create --resource-group $rg `
-  --zone-name 'privatelink.azurecr.io' --name "link-$vnetName" `
-  --virtual-network $vnetName --registration-enabled false
+# Resolve the zone by ID so this works even when the zone and endpoint are in different groups
+$zoneId = az network private-dns zone show --resource-group $vnetRg `
+  --name 'privatelink.azurecr.io' --query id -o tsv
 
 az network private-endpoint dns-zone-group create `
-  --resource-group $rg --endpoint-name "pe-$acrName" `
-  --name 'default' --private-dns-zone 'privatelink.azurecr.io' --zone-name 'acr'
+  --resource-group $vnetRg --endpoint-name "pe-$acrName" `
+  --name 'default' --private-dns-zone $zoneId --zone-name 'acr'
 ```
 
 > [!IMPORTANT]
@@ -485,17 +500,19 @@ az acr update --name $acrName --public-network-enabled false
 
 **5. VNet-injected Container Apps environment**
 
-```powershell
-# Workload profiles environments require delegation. Consumption-only must NOT be delegated.
-az network vnet subnet update --resource-group $rg --vnet-name $vnetName `
-  --name $acaSubnet --delegations Microsoft.App/environments
+The subnet was created and delegated in **Provision the network**. This step only resolves its ID and
+creates the environment.
 
-$acaSubnetId = az network vnet subnet show --resource-group $rg `
+```powershell
+$acaSubnetId = az network vnet subnet show --resource-group $vnetRg `
   --vnet-name $vnetName --name $acaSubnet --query id -o tsv
 
 az containerapp env create --name $envName --resource-group $rg --location $location `
   --infrastructure-subnet-resource-id $acaSubnetId --enable-workload-profiles
 ```
+
+The environment lives in `$rg` while the subnet lives in `$vnetRg`. That is expected — the subnet is
+passed by resource ID, so the two do not need to share a resource group.
 
 Add `--internal-only true` if the MCP endpoint itself should not be reachable from the internet. Only
 do this if Foundry can reach it privately — with a public Foundry project, the endpoint must remain
