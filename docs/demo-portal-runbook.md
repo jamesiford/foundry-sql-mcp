@@ -206,22 +206,181 @@ flowchart LR
 
 **SQL MI is already VNet-resident.** Unlike Azure SQL Database, SQL Managed Instance is always deployed into a delegated subnet and always has a VNet-local endpoint. "Connecting privately" therefore does not mean adding a private endpoint — it means placing the MCP runtime somewhere that can route to the MI subnet, using the VNet-local FQDN on **1433**, and disabling the optional public endpoint on **3342**.
 
-### What to ask the network team for
+### Provision the network
 
-The Container Apps and private-endpoint subnets normally sit in customer-managed network space, so
-raise these as one request rather than discovering them step by step.
+These steps create the network prerequisites. They are ordinary Azure networking operations.
 
-| Ask | Detail |
-|---|---|
-| Container Apps infrastructure subnet | **/27 or larger** for a workload profiles environment, **/23 or larger** for the legacy Consumption-only environment. Must be dedicated to Container Apps — no other service may use it |
-| Subnet delegation | Workload profiles environments require the subnet delegated to `Microsoft.App/environments`. Consumption-only environments must **not** be delegated |
-| Private-endpoint subnet | /28 is usually sufficient. May be shared with other private endpoints |
-| Routing to SQL MI | Same VNet as the managed instance, or a peering with routing confirmed in both directions |
-| DNS | Confirm whether the VNet uses Azure-provided DNS or custom DNS servers. Custom DNS needs conditional forwarders for the private zones below |
-| Private DNS zones | `privatelink.azurecr.io` linked to the VNet |
+> [!IMPORTANT]
+> **You cannot reuse the SQL Managed Instance subnet, but you can use its virtual network.**
+> The MI subnet — usually named `ManagedInstance` — is delegated to
+> `Microsoft.Sql/managedInstances`. Selecting it for a private endpoint or a Container Apps
+> environment fails with:
+>
+> ```text
+> The selected subnet 'ManagedInstance' has a delegation and cannot be used with a private endpoint.
+> The selected subnet 'ManagedInstance' has a delegation and cannot be used.
+> ```
+>
+> This is a **subnet** constraint, not a virtual network constraint. A delegated subnet cannot host
+> private endpoints, and a subnet delegated to one service cannot be delegated to another. The fix is
+> to add **new, separate subnets** to the same virtual network — not to build a second network.
 
-SQL MI needs no private endpoint. It is already deployed into a delegated subnet and always has a
-VNet-local endpoint; reaching it privately is a routing question, not a Private Link question.
+You will end up with three subnets in one virtual network:
+
+| Subnet | Delegation | Size | Holds |
+|---|---|---|---|
+| `ManagedInstance` (existing) | `Microsoft.Sql/managedInstances` | existing | SQL MI only — leave untouched |
+| `snet-aca-mcp` (new) | `Microsoft.App/environments` | **/27** or larger | The Container Apps environment |
+| `snet-private-endpoints` (new) | **none** | /28 is usually enough | The ACR private endpoint |
+
+Resources in different subnets of the same virtual network route to each other by default, so no
+peering, route tables or NSG rules are required for the container to reach SQL MI.
+
+> [!NOTE]
+> **Permissions.** You need `Network Contributor` on the virtual network, or a role that allows
+> creating subnets, delegations, private DNS zones and virtual network links.
+
+Set the variables used throughout:
+
+```powershell
+$rg          = '<resource-group>'
+$location    = '<region>'
+$vnetRg      = '<vnet-resource-group>'      # often differs from the app resource group
+$vnetName    = '<vnet-hosting-sql-mi>'
+$acaSubnet   = 'snet-aca-mcp'
+$peSubnet    = 'snet-private-endpoints'
+```
+
+**1. Inspect the SQL MI virtual network and find free address space**
+
+```powershell
+# Locate the managed instance and the subnet it is delegated into
+az sql mi list --query "[].{name:name, subnet:subnetId}" -o table
+
+# Address space and subnets already in use
+az network vnet show --resource-group $vnetRg --name $vnetName `
+  --query "{addressSpace:addressSpace.addressPrefixes, subnets:subnets[].{name:name, prefix:addressPrefix, delegation:delegations[0].serviceName}}" -o json
+```
+
+The output confirms the delegation on the MI subnet and shows what address space remains. Choose
+ranges that do not overlap anything listed.
+
+If there is no free space, extend the virtual network rather than creating a second one. This is a
+non-disruptive operation and keeps you on the simpler topology:
+
+```powershell
+az network vnet update --resource-group $vnetRg --name $vnetName `
+  --address-prefixes <existing-range> <new-range>
+```
+
+**2. Create the Container Apps subnet and delegate it**
+
+The subnet must be dedicated — no other resource may use it.
+
+```powershell
+# /27 or larger for a workload profiles environment (/23 or larger for legacy Consumption-only)
+az network vnet subnet create --resource-group $vnetRg --vnet-name $vnetName `
+  --name $acaSubnet --address-prefixes <aca-range>
+
+# Workload profiles environments REQUIRE this delegation.
+# Consumption-only environments must NOT be delegated.
+az network vnet subnet update --resource-group $vnetRg --vnet-name $vnetName `
+  --name $acaSubnet --delegations Microsoft.App/environments
+```
+
+**3. Create the private-endpoint subnet — with no delegation**
+
+Do not delegate this subnet to anything. A delegation here reproduces the error above.
+
+```powershell
+az network vnet subnet create --resource-group $vnetRg --vnet-name $vnetName `
+  --name $peSubnet --address-prefixes <pe-range>          # /28 is usually sufficient
+
+# Private endpoint network policies must be disabled on this subnet.
+# Recently created subnets default to Disabled; verify rather than assume.
+az network vnet subnet show --resource-group $vnetRg --vnet-name $vnetName `
+  --name $peSubnet --query privateEndpointNetworkPolicies -o tsv
+
+# If it returns anything other than Disabled:
+az network vnet subnet update --resource-group $vnetRg --vnet-name $vnetName `
+  --name $peSubnet --disable-private-endpoint-network-policies true
+```
+
+**4. Create the private DNS zone for the registry and link it to the virtual network**
+
+Create the zone now; the endpoint's records are added later by the `dns-zone-group` command, once
+the registry exists.
+
+```powershell
+az network private-dns zone create --resource-group $vnetRg --name 'privatelink.azurecr.io'
+
+az network private-dns link vnet create --resource-group $vnetRg `
+  --zone-name 'privatelink.azurecr.io' --name "link-$vnetName" `
+  --virtual-network $vnetName --registration-enabled false
+```
+
+**5. Confirm DNS behaviour before going further**
+
+```powershell
+az network vnet show --resource-group $vnetRg --name $vnetName --query dhcpOptions.dnsServers -o json
+```
+
+An empty result means the virtual network uses Azure-provided DNS and the private zone resolves
+automatically. If custom DNS servers are listed, those servers must forward `privatelink.azurecr.io`
+to Azure DNS at `168.63.129.16`, or private resolution fails even though every resource is configured
+correctly. Confirm with whoever runs those servers before continuing.
+
+Note that SQL MI requires its custom DNS to resolve public DNS records as well, so a
+misconfiguration here can affect the managed instance rather than only the new components.
+
+**6. Verify the network is ready**
+
+```powershell
+az network vnet subnet show --resource-group $vnetRg --vnet-name $vnetName `
+  --name $acaSubnet --query "{prefix:addressPrefix, delegation:delegations[0].serviceName}" -o json
+
+az network vnet subnet show --resource-group $vnetRg --vnet-name $vnetName `
+  --name $peSubnet --query "{prefix:addressPrefix, delegation:delegations[0].serviceName, policies:privateEndpointNetworkPolicies}" -o json
+```
+
+Expect the Container Apps subnet delegated to `Microsoft.App/environments`, and the private-endpoint
+subnet with **no delegation** and policies `Disabled`. If either shows an unexpected delegation, fix
+it before creating any resource that depends on it.
+
+SQL MI itself needs no private endpoint and no additional DNS zone. It is already virtual-network
+resident with a VNet-local endpoint; once the Container Apps subnet exists in the same virtual
+network, the routing question is answered.
+
+### If the SQL MI virtual network cannot be used
+
+Extending the existing virtual network is the simpler path and should be the default. Use a separate
+virtual network with peering only where policy forbids adding subnets to the MI network, or the
+address space cannot be extended.
+
+```powershell
+$miVnetId  = az network vnet show --resource-group $vnetRg --name $vnetName --query id -o tsv
+$acaVnetId = az network vnet show --resource-group $rg --name '<aca-vnet>' --query id -o tsv
+
+# Peering must exist in BOTH directions. A one-way peering silently fails to route.
+az network vnet peering create --resource-group $rg --vnet-name '<aca-vnet>' `
+  --name 'aca-to-mi' --remote-vnet $miVnetId --allow-vnet-access
+
+az network vnet peering create --resource-group $vnetRg --vnet-name $vnetName `
+  --name 'mi-to-aca' --remote-vnet $acaVnetId --allow-vnet-access
+```
+
+Also link `privatelink.azurecr.io` to the second virtual network, or the Container App will not
+resolve the registry privately:
+
+```powershell
+az network private-dns link vnet create --resource-group $vnetRg `
+  --zone-name 'privatelink.azurecr.io' --name 'link-aca-vnet' `
+  --virtual-network $acaVnetId --registration-enabled false
+```
+
+Verify name resolution of the SQL MI VNet-local FQDN from the Container Apps subnet before deploying
+the container. Peered networks route by default, but custom DNS or a firewall appliance in the path
+can still break resolution.
 
 ### Order of operations
 
@@ -239,7 +398,7 @@ Two constraints dictate the sequence, and getting it wrong means redoing work.
 > registry means rebuilding and pushing into it. Re-run step 9's build against the new registry name
 > before creating the Container App.
 
-1. Network team provisions the subnets, delegation, peering and DNS zones
+1. Provision the network - new subnets, delegation, DNS zone (above)
 2. Create the Premium registry with public access still enabled
 3. Build and push the image (step 9) into the new registry
 4. Add the registry private endpoint and DNS records
@@ -380,10 +539,11 @@ reviewer will ask for.
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `The selected subnet 'ManagedInstance' has a delegation and cannot be used` | Attempting to place a private endpoint or the Container Apps environment in the SQL MI subnet | Create new subnets in the same virtual network — the MI subnet is delegated to `Microsoft.Sql/managedInstances` and cannot be shared |
 | `az acr build` fails or hangs | Public network access already disabled on the registry | Build before locking down, or assign a dedicated agent pool / allowlist the `AzureContainerRegistry` service tag |
 | Image pull authenticates then hangs | Data endpoint DNS record missing | Use the `dns-zone-group` command so all records are created |
 | Environment creation fails on the subnet | Subnet too small, not dedicated, or delegation wrong for the environment type | /27+ and delegated for workload profiles; /23+ and not delegated for Consumption-only |
-| Container starts but cannot reach SQL | Peering or DNS not resolving the MI VNet-local FQDN | Verify from a VM in the same subnet before blaming the container |
+| Container starts but cannot reach SQL | DNS not resolving the MI VNet-local FQDN, or peering missing a direction | Verify from a VM in the Container Apps subnet before blaming the container |
 | Agent gets a 401 | Audience or tenant placeholder not substituted at build time | Rebuild with the real values — unrelated to networking |
 
 ## Required access
