@@ -37,3 +37,6 @@ Thumbs.db
 # Logs and temporary files
 *.log
 *.tmp
+
+# Notebook scratch output
+notebooks/generated/

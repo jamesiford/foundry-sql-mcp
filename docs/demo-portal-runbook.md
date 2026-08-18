@@ -174,7 +174,7 @@ The numbered steps below build the **public evaluation topology**: a public Cont
 This section defines the **hybrid variant** used when the database is Azure SQL Managed Instance and must be reached privately. Everything Foundry-side stays public; everything data-side moves inside the virtual network.
 
 > [!TIP]
-> **There is an executable notebook for this variant.** [`notebooks/hybrid-setup.ipynb`](../notebooks/hybrid-setup.ipynb) runs the whole sequence cell by cell with a preflight that creates nothing, idempotent steps, and a verification after each phase. Use this section for the reasoning and the notebook for the execution. It needs VS Code with the Polyglot Notebooks extension — it will not run in Azure Cloud Shell.
+> **There is an executable notebook for this variant.** [`notebooks/hybrid-setup.ipynb`](../notebooks/hybrid-setup.ipynb) runs the whole sequence cell by cell — from an empty subscription through to a working agent, including SQL MI, Foundry, the Entra application and the data contract. Every cell checks before it creates, so it is safe to re-run from any partially-deployed state. Use this section for the reasoning and the notebook for the execution. It needs VS Code with the Polyglot Notebooks extension — it will not run in Azure Cloud Shell.
 
 ```mermaid
 flowchart LR
