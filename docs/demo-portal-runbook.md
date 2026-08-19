@@ -564,7 +564,9 @@ reviewer will ask for.
 | Image pull authenticates then hangs | Data endpoint DNS record missing | Use the `dns-zone-group` command so all records are created |
 | Environment creation fails on the subnet | Subnet too small, not dedicated, or delegation wrong for the environment type | /27+ and delegated for workload profiles; /23+ and not delegated for Consumption-only |
 | Container starts but cannot reach SQL | DNS not resolving the MI VNet-local FQDN, or peering missing a direction | Verify from a VM in the Container Apps subnet before blaming the container |
-| Agent gets a 401 | Audience or tenant placeholder not substituted at build time | Rebuild with the real values — unrelated to networking |
+| Agent gets a 401 | The Entra application emits v1 tokens because `requestedAccessTokenVersion` is unset | Set it to `2` — a v1 token's `aud` is `api://<id>` and its issuer is `sts.windows.net`, neither of which DAB accepts. See [Required access](#required-access) |
+| Agent gets a 401 after the token version is correct | Audience or tenant placeholder not substituted at build time | Rebuild with the real values — unrelated to networking |
+| Agent gets a 401 immediately after fixing the app registration | Foundry is still presenting a cached token | Tokens live up to an hour; wait it out or recreate the project connection |
 
 ## Required access
 
@@ -798,6 +800,32 @@ Keep these two audience forms distinct:
 
 - Foundry RemoteTool connection audience: `api://<application-client-id>`.
 - DAB expected JWT `aud` claim: the bare `<application-client-id>` GUID.
+
+These are not arbitrary. They are the two halves of the same v2 token: Foundry *requests* `api://<client-id>`, and Entra *issues* a token whose `aud` is the bare GUID. That only holds if the application is set to emit v2 tokens.
+
+**The application must be configured for access token version 2.** `az ad app create` and the portal both leave `requestedAccessTokenVersion` unset, which means v1. A v1 token for this resource looks like this:
+
+| Claim | v1 token (default) | v2 token (required) |
+|---|---|---|
+| `aud` | `api://<client-id>` | `<client-id>` |
+| `iss` | `https://sts.windows.net/<tenant-id>/` | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
+
+Both claims disagree with the DAB configuration, so **every** call is rejected with `401` even though the app role assignment is correct and the token genuinely contains `Mcp.Invoke`. `setup-demo-entra.ps1` sets this and then asserts it. If the application was created by hand, set it explicitly:
+
+```powershell
+$appId = '<application-client-id>'
+$objectId = az ad app show --id $appId --query id -o tsv
+$api = az ad app show --id $appId --query api -o json | ConvertFrom-Json
+$api.requestedAccessTokenVersion = 2
+$patch = Join-Path $env:TEMP 'mcp-token-version.json'
+Set-Content $patch (@{ api = $api } | ConvertTo-Json -Depth 20) -Encoding utf8NoBOM
+az rest --method patch --url "https://graph.microsoft.com/v1.0/applications/$objectId" `
+  --headers 'Content-Type=application/json' --body "@$patch"
+
+az ad app show --id $appId --query 'api.requestedAccessTokenVersion' -o tsv   # must print 2
+```
+
+In the portal this is **App registrations → your app → Manifest → `requestedAccessTokenVersion`**. Set it to `2` and save. Tokens already issued remain valid for their lifetime, so allow up to an hour for a cached token to age out, or recreate the Foundry connection to force a fresh acquisition.
 
 Foundry sends a tenant-v2 token containing `Mcp.Invoke`. The project connection must explicitly enable use of the project managed identity.
 
@@ -1331,6 +1359,51 @@ Summarize the transfer pipeline for advisor ADV-MIL-01.
 ```
 
 Each response must contain grounded synthetic SQL rows. Anonymous MCP/data calls must fail, wrong-audience tokens must fail, and raw tables/write operations must remain unavailable.
+
+### Diagnosing a 401 from the agent
+
+A 401 surfaces in the agent as `Authentication failed when connecting to the MCP server`. That message is generic and the cause is always one of four things. Work them in this order — the first two account for most cases and take a minute between them.
+
+**1. Read the rejection reason from the server.** DAB names the failing claim, which removes all guesswork:
+
+```powershell
+az containerapp logs show -n <container-app> -g <resource-group> --tail 200 |
+  Select-String -Pattern 'IDX10|401|Bearer|Unauthorized'
+```
+
+| Log fragment | Meaning |
+|---|---|
+| `IDX10214: Audience validation failed` | `aud` mismatch — token version, or the wrong GUID baked into the image |
+| `IDX10205: Issuer validation failed` | `iss` mismatch — token version, or the wrong tenant baked into the image |
+| `IDX10223`/`IDX10230` lifetime or signature | Clock skew or a token from another tenant |
+| No DAB entry at all for the request | The 401 was generated before DAB — see step 4 |
+
+**2. Check the token version on the application.** This is the most common cause and it is invisible from every other surface:
+
+```powershell
+az ad app show --id <mcp-application-client-id> `
+  --query '{tokenVersion:api.requestedAccessTokenVersion, idUris:identifierUris, roles:appRoles[].value}' -o json
+```
+
+`tokenVersion` must be `2`. Empty or `1` is the defect described under [Required access](#required-access) — Entra issues `aud: api://<id>` and `iss: https://sts.windows.net/<tenant>/`, and DAB rejects both.
+
+**3. Check what was actually baked into the running image.** The audience and issuer are build-time values, so a stale image outlives a corrected application:
+
+```powershell
+az containerapp exec -n <container-app> -g <resource-group> --command "cat /App/dab-config.json"
+```
+
+The `audience` must be the bare client-ID GUID and `issuer` must end in `/v2.0` with your tenant. If either is still `00000000-...` or `11111111-...`, the image was built from the committed configuration rather than through `build-demo-mcp.ps1`. Rebuild and deploy a new revision.
+
+**4. Confirm nothing in front of DAB is rejecting the call.** If step 1 shows no DAB log entry for the request, the 401 was produced upstream. Check that the Container App's built-in authentication is **disabled** — it returns 401 before traffic reaches the container, and it is not used by this design:
+
+```powershell
+az containerapp auth show -n <container-app> -g <resource-group> --query 'platform.enabled'
+```
+
+Also confirm the connection URL has no trailing path beyond `/mcp` and that ingress is external.
+
+**A note on replica count.** Scaling to zero does not cause a 401. A cold start produces a delay, a timeout, or a 5xx — never an authentication failure. Set minimum replicas to 1 for demos so the first prompt is not slow, but do not treat it as an auth fix.
 
 ## 15. Cleanup
 

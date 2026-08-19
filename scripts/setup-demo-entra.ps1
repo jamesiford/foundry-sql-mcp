@@ -51,9 +51,22 @@ $appRoles = @(
     }
 )
 
+# Entra issues v1 tokens for a resource whose requestedAccessTokenVersion is unset,
+# and a v1 token carries aud 'api://<client-id>' with issuer https://sts.windows.net/<tenant>/.
+# DAB is configured for the v2 shape - bare client-ID aud and the /v2.0 issuer - so leaving
+# this unset makes every call fail JWT validation with a 401. Read-modify-write the api
+# object so any delegated scopes defined later are preserved.
+$api = if ($application.PSObject.Properties['api'] -and $application.api) {
+    $application.api
+} else {
+    [pscustomobject]@{}
+}
+$api | Add-Member -NotePropertyName requestedAccessTokenVersion -NotePropertyValue 2 -Force
+
 $patchBody = @{
     identifierUris = @($audience)
     appRoles = $appRoles
+    api = $api
 } | ConvertTo-Json -Depth 20
 $patchPath = Join-Path $env:TEMP 'foundry-sql-mcp-demo-app-patch.json'
 Set-Content -LiteralPath $patchPath -Value $patchBody -Encoding utf8NoBOM
@@ -67,7 +80,6 @@ $resourceServicePrincipal = az ad sp show --id $applicationId -o json 2>$null | 
 if (-not $resourceServicePrincipal) {
     $resourceServicePrincipal = az ad sp create --id $applicationId -o json | ConvertFrom-Json
 }
-
 if (-not $resourceServicePrincipal.appRoleAssignmentRequired) {
     $servicePrincipalPatchPath = Join-Path $env:TEMP 'foundry-sql-mcp-demo-sp-patch.json'
     Set-Content -LiteralPath $servicePrincipalPatchPath -Value '{"appRoleAssignmentRequired":true}' -Encoding utf8NoBOM
@@ -97,6 +109,13 @@ azd env set MCP_AUTH_APP_ID $applicationId
 azd env set MCP_AUTH_AUDIENCE $audience
 azd env set MCP_AUTH_ISSUER $issuer
 
+# Assert the token shape the server will actually receive. Without this the whole chain
+# reports success and only the agent call fails, several steps later.
+$tokenVersion = az ad app show --id $applicationId --query 'api.requestedAccessTokenVersion' -o tsv
+if ($tokenVersion -ne '2') {
+    throw "Access token version is '$tokenVersion', expected 2. Entra would issue v1 tokens and DAB would reject them with 401."
+}
+
 [pscustomobject]@{
     ApplicationId = $applicationId
     ApplicationObjectId = $applicationObjectId
@@ -104,4 +123,7 @@ azd env set MCP_AUTH_ISSUER $issuer
     Issuer = $issuer
     AppRoleId = $appRoleId
     ProjectPrincipalId = $ProjectPrincipalId
+    AccessTokenVersion = 2
+    ExpectedTokenAudience = $applicationId
+    ExpectedTokenIssuer = $issuer
 } | Format-List

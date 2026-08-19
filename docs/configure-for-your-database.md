@@ -388,6 +388,7 @@ Points that matter:
 
 - **Never put a credential in `connection-string`.** `@env(...)` reads it from the Container App at runtime, and the connection uses managed identity.
 - **The audience and issuer are build-time placeholders.** The build script substitutes your real MCP application client ID and tenant ID. Verify that substitution happened — a mismatch surfaces as a `401` much later, far from its cause.
+- **The Entra application must emit v2 tokens.** The `aud` above is a bare GUID and the issuer ends in `/v2.0`, which is the v2 token shape. An application left at the Entra default emits v1 tokens with `aud` of `api://<client-id>` and an `sts.windows.net` issuer, so both claims are rejected. Confirm with `az ad app show --id <client-id> --query 'api.requestedAccessTokenVersion'` — it must return `2`.
 - **REST and GraphQL are switched off.** The agent uses MCP. Every other surface is attack surface.
 - **`"mode": "production"`** suppresses detailed error messages to callers.
 - **`autoentities` stays empty for now.** See section 10.
@@ -679,6 +680,7 @@ Work top to bottom. Do not skip ahead — each step assumes the one above.
 
 - [ ] `dab validate` passes
 - [ ] Audience and tenant placeholders substituted in the built image
+- [ ] Entra application `requestedAccessTokenVersion` set to `2`
 - [ ] Container starts clean; no schema errors in the logs
 - [ ] `describe_entities` returns entities **with** field descriptions
 
