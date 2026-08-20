@@ -1258,6 +1258,9 @@ Do not add SQL passwords, registry passwords, or secrets to the Container App.
 
 The container resolves every configured entity against the database during startup, so the first thirty seconds of log output identify the layer at fault. Read the revision's console logs before changing anything.
 
+> [!TIP]
+> For a command-driven checklist covering Container App scale-to-zero, DAB startup failures, deployed-image drift, agent tool allowlists, and `401 Unauthorized` responses from `/mcp`, see [Troubleshooting SQL MCP Container Apps and Foundry authentication](troubleshooting-sql-mcp-auth-and-container-app.md).
+
 | Log message | Cause | Fix |
 |---|---|---|
 | `Cannot access ACR ... admin credentials ... are disabled` | Registry authentication was set to *Secrets* | Use Path A or Path B; confirm both prerequisites above |
