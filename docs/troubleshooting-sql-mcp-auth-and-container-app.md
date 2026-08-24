@@ -227,7 +227,7 @@ Interpret the result:
 
 ## 6. Troubleshoot `401 Unauthorized` from Foundry to `/mcp`
 
-> The intended configuration of every component in this path is specified in [How Foundry-to-MCP authentication is supposed to work](auth-chain-reference.md), and [`scripts/verify-auth-chain.ps1`](../scripts/verify-auth-chain.ps1) checks all of it in one pass.
+> The intended configuration of every component in this path is specified in [How Foundry-to-MCP authentication is supposed to work](auth-chain-reference.md), a [portal walkthrough](auth-chain-portal-walkthrough.md) covers the same checks without the CLI, and [`scripts/verify-auth-chain.ps1`](../scripts/verify-auth-chain.ps1) checks all of it in one pass.
 
 An error like this means Foundry reached *something* that returned 401:
 
@@ -384,4 +384,5 @@ Then register a new agent version:
 ```
 
 Run the live `describe_entities` test again after these steps.
+
 

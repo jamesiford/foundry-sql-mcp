@@ -1371,7 +1371,17 @@ A 401 surfaces in the agent as `Authentication failed when connecting to the MCP
 
 > **Do not start with the container logs.** Data API builder logs **nothing at all** when it rejects a token — no `IDX` code, no request line, not even at `debug` log level. This was verified directly against `data-api-builder:2.0.9`: three rejected calls produced zero log output. **Empty logs are the expected appearance of a token rejection, not evidence that traffic never arrived.** An earlier revision of this runbook said otherwise and was wrong.
 
-**1. Establish whether the 401 is coming from DAB or from something in front of it.** This is the single most valuable test, because the two causes have nothing in common. Call a path that DAB does not protect, with **no** token:
+**1. Establish whether the 401 is coming from DAB or from something in front of it.** This is the single most valuable test, because the two causes have nothing in common.
+
+**In a browser**, open `https://<container-app-fqdn>/` with no token. DAB serves an unauthenticated health payload at its root:
+
+| What you see | Meaning |
+|---|---|
+| `{"status":"Healthy","version":"2.0.9","app-name":"dab_oss_2.0.9"}` | The request reached DAB. The 401 on `/mcp` is a token rejection — go to step 2 |
+| A **Microsoft sign-in page** | Container Apps built-in authentication is answering before DAB — go to step 4 |
+| Nothing or a timeout | The app is not running, or ingress is misconfigured |
+
+**From a shell**, if you prefer explicit status codes:
 
 ```powershell
 $fqdn = az containerapp show -n <container-app> -g <resource-group> --query 'properties.configuration.ingress.fqdn' -o tsv
@@ -1380,10 +1390,10 @@ curl.exe -s -o NUL -w "%{http_code}\n" "https://$fqdn/api"
 
 | Result | Meaning |
 |---|---|
-| `404` (or `400`/`406`) | The request reached DAB. The 401 on `/mcp` is DAB rejecting the token — go to step 2 |
-| `401` | Something **in front of** DAB is answering. DAB never returns 401 on an unauthenticated `/api` — go to step 4 |
+| `404` (or `400`/`406`) | The request reached DAB — go to step 2 |
+| `401` | Something **in front of** DAB is answering — go to step 4 |
 
-Verified response codes for an unauthenticated DAB in this configuration: `/api` → 404, `/mcp` → 406, unknown paths → 400, `/health` → 403. **None of them are 401.**
+Verified response codes for an unauthenticated DAB in this configuration: `/` → 200 with the health payload, `/api` → 404, `/mcp` → 406, unknown paths → 400, `/health` → 403. **None of them are 401.**
 
 **2. Check the token version on the application.** Invisible from every other surface, and the default is wrong:
 

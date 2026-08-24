@@ -5,8 +5,10 @@ authenticating a Foundry agent to the SQL MCP Server, what each one must be set 
 verify it. It is deliberately written as a contract rather than as a troubleshooting narrative,
 so it can be walked top to bottom against any deployment.
 
-Use [`scripts/verify-auth-chain.ps1`](../scripts/verify-auth-chain.ps1) to evaluate all of it at
-once. Use [the runbook's 401 section](demo-portal-runbook.md#diagnosing-a-401-from-the-agent) when
+Working in the portal? Use the [portal walkthrough](auth-chain-portal-walkthrough.md) — the same
+contract expressed as places to click. Prefer the CLI?
+[`scripts/verify-auth-chain.ps1`](../scripts/verify-auth-chain.ps1) evaluates all of it in one pass.
+Use [the runbook's 401 section](demo-portal-runbook.md#diagnosing-a-401-from-the-agent) when
 something here does not match.
 
 ## The chain
@@ -203,15 +205,25 @@ they cannot be used to prove traffic never arrived.
 
 Use response codes instead. Unauthenticated, a healthy DAB returns:
 
-| Path | Code |
-|---|---|
-| `/api` | `404` |
-| `/mcp` | `406` |
-| unknown path | `400` |
-| `/health` | `403` |
+| Path | Code | Body |
+|---|---|---|
+| `/` | `200` | `{"status":"Healthy","version":"2.0.9","app-name":"dab_oss_2.0.9"}` |
+| `/api` | `404` | empty |
+| `/mcp` | `406` | empty |
+| unknown path | `400` | empty |
+| `/health` | `403` | empty |
 
 **None of them are `401`.** So an unauthenticated `/api` returning `401` proves something in front
 of DAB answered.
+
+**The root path is the fastest test of all and needs no tooling.** Open `https://<container-app-fqdn>/`
+in a browser:
+
+- **A JSON health payload naming the DAB version** — the request reached DAB, nothing is in front of
+  it, and the container is running. A `401` on `/mcp` is therefore a token rejection.
+- **A Microsoft sign-in page** — Container Apps built-in authentication is enabled and is answering
+  before DAB. That is the fault.
+- **Nothing, or a timeout** — the app is not running or ingress is misconfigured.
 
 ## Verify everything at once
 
