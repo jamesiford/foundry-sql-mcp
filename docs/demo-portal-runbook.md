@@ -1365,6 +1365,8 @@ Each response must contain grounded synthetic SQL rows. Anonymous MCP/data calls
 
 ### Diagnosing a 401 from the agent
 
+> For the target state of every component in the authentication path — what each one must be set to and why — see [How Foundry-to-MCP authentication is supposed to work](auth-chain-reference.md). Run [`scripts/verify-auth-chain.ps1`](../scripts/verify-auth-chain.ps1) to evaluate it all in one pass.
+
 A 401 surfaces in the agent as `Authentication failed when connecting to the MCP server`. That message is generic. Work the checks below in order — each one eliminates a whole branch.
 
 > **Do not start with the container logs.** Data API builder logs **nothing at all** when it rejects a token — no `IDX` code, no request line, not even at `debug` log level. This was verified directly against `data-api-builder:2.0.9`: three rejected calls produced zero log output. **Empty logs are the expected appearance of a token rejection, not evidence that traffic never arrived.** An earlier revision of this runbook said otherwise and was wrong.

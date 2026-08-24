@@ -736,6 +736,7 @@ Additional design detail:
 - [SQL MCP contract](docs/sql-mcp.md)
 - [Configuring SQL MCP Server for your own databases](docs/configure-for-your-database.md)
 - [SQL backend options](docs/sql-backend-options.md)
+- [Auth chain reference](docs/auth-chain-reference.md) — how Foundry-to-MCP authentication is supposed to be configured, component by component
 - [Hybrid setup notebook](notebooks/hybrid-setup.ipynb) — executable end-to-end private topology setup, greenfield or resumable
 - [Foundry IQ contract](docs/foundry-iq.md)
 - [ADR-001: Foundry SQL agent architecture](docs/decisions/ADR-001-foundry-sql-agent-architecture.md)
@@ -757,3 +758,4 @@ Review these current sources before each customer deployment because Foundry and
 - [Connect Azure AI Search to SQL MI with managed identity](https://learn.microsoft.com/azure/search/search-how-to-index-sql-managed-instance-with-managed-identity)
 - [Create a Search shared private link to SQL MI](https://learn.microsoft.com/azure/search/search-indexer-how-to-access-private-sql)
 - [Configure the SQL MI public endpoint](https://learn.microsoft.com/azure/azure-sql/managed-instance/public-endpoint-configure)
+
