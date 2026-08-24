@@ -1365,48 +1365,64 @@ Each response must contain grounded synthetic SQL rows. Anonymous MCP/data calls
 
 ### Diagnosing a 401 from the agent
 
-A 401 surfaces in the agent as `Authentication failed when connecting to the MCP server`. That message is generic and the cause is always one of four things. Work them in this order — the first two account for most cases and take a minute between them.
+A 401 surfaces in the agent as `Authentication failed when connecting to the MCP server`. That message is generic. Work the checks below in order — each one eliminates a whole branch.
 
-**1. Read the rejection reason from the server.** DAB names the failing claim, which removes all guesswork:
+> **Do not start with the container logs.** Data API builder logs **nothing at all** when it rejects a token — no `IDX` code, no request line, not even at `debug` log level. This was verified directly against `data-api-builder:2.0.9`: three rejected calls produced zero log output. **Empty logs are the expected appearance of a token rejection, not evidence that traffic never arrived.** An earlier revision of this runbook said otherwise and was wrong.
+
+**1. Establish whether the 401 is coming from DAB or from something in front of it.** This is the single most valuable test, because the two causes have nothing in common. Call a path that DAB does not protect, with **no** token:
 
 ```powershell
-az containerapp logs show -n <container-app> -g <resource-group> --tail 200 |
-  Select-String -Pattern 'IDX10|401|Bearer|Unauthorized'
+$fqdn = az containerapp show -n <container-app> -g <resource-group> --query 'properties.configuration.ingress.fqdn' -o tsv
+curl.exe -s -o NUL -w "%{http_code}\n" "https://$fqdn/api"
 ```
 
-| Log fragment | Meaning |
+| Result | Meaning |
 |---|---|
-| `IDX10214: Audience validation failed` | `aud` mismatch — token version, or the wrong GUID baked into the image |
-| `IDX10205: Issuer validation failed` | `iss` mismatch — token version, or the wrong tenant baked into the image |
-| `IDX10223`/`IDX10230` lifetime or signature | Clock skew or a token from another tenant |
-| No DAB entry at all for the request | The 401 was generated before DAB — see step 4 |
+| `404` (or `400`/`406`) | The request reached DAB. The 401 on `/mcp` is DAB rejecting the token — go to step 2 |
+| `401` | Something **in front of** DAB is answering. DAB never returns 401 on an unauthenticated `/api` — go to step 4 |
 
-**2. Check the token version on the application.** This is the most common cause and it is invisible from every other surface:
+Verified response codes for an unauthenticated DAB in this configuration: `/api` → 404, `/mcp` → 406, unknown paths → 400, `/health` → 403. **None of them are 401.**
+
+**2. Check the token version on the application.** Invisible from every other surface, and the default is wrong:
 
 ```powershell
 az ad app show --id <mcp-application-client-id> `
   --query '{tokenVersion:api.requestedAccessTokenVersion, idUris:identifierUris, roles:appRoles[].value}' -o json
 ```
 
-`tokenVersion` must be `2`. Empty or `1` is the defect described under [Required access](#required-access) — Entra issues `aud: api://<id>` and `iss: https://sts.windows.net/<tenant>/`, and DAB rejects both.
+`tokenVersion` must be `2`. Empty or `1` is the defect described under [Required access](#required-access) — Entra issues `aud: api://<id>` and `iss: https://sts.windows.net/<tenant>/`, and DAB rejects both. Tokens already issued survive the change for up to an hour.
 
-**3. Check what was actually baked into the running image.** The audience and issuer are build-time values, so a stale image outlives a corrected application:
+**3. Check what was actually baked into the running image.** The audience and issuer are build-time values, so a stale image outlives a corrected application. This is the most common cause after the token version, and it is guaranteed if the image was built without `build-demo-mcp.ps1`:
 
 ```powershell
 az containerapp exec -n <container-app> -g <resource-group> --command "cat /App/dab-config.json"
 ```
 
-The `audience` must be the bare client-ID GUID and `issuer` must end in `/v2.0` with your tenant. If either is still `00000000-...` or `11111111-...`, the image was built from the committed configuration rather than through `build-demo-mcp.ps1`. Rebuild and deploy a new revision.
+The `audience` must be the bare client-ID GUID and `issuer` must end in `/v2.0` with your tenant. If either is still `00000000-...` or `11111111-...`, the image was built from the committed configuration and **no token will ever validate**. Rebuild through the script and deploy a new revision.
 
-**4. Confirm nothing in front of DAB is rejecting the call.** If step 1 shows no DAB log entry for the request, the 401 was produced upstream. Check that the Container App's built-in authentication is **disabled** — it returns 401 before traffic reaches the container, and it is not used by this design:
+**4. Confirm nothing in front of DAB is rejecting the call.** Container Apps built-in authentication returns 401 before traffic reaches the container. It is **not** used by this design — Foundry authenticates to DAB directly with an Entra token, and enabling platform authentication breaks that:
 
 ```powershell
-az containerapp auth show -n <container-app> -g <resource-group> --query 'platform.enabled'
+az containerapp auth show -n <container-app> -g <resource-group> --query '{enabled:platform.enabled, action:globalValidation.unauthenticatedClientAction}'
 ```
 
-Also confirm the connection URL has no trailing path beyond `/mcp` and that ingress is external.
+`enabled` must be `false` or the command must report that authentication is not configured. If it is `true`, disable it:
+
+```powershell
+az containerapp auth update -n <container-app> -g <resource-group> --enabled false
+```
+
+**5. Confirm you are debugging the app the agent is actually calling.** If more than one Container App was created during troubleshooting, the Foundry connection may point at an older one still running a stale image. Compare the two directly:
+
+```powershell
+az containerapp list -g <resource-group> --query "[].{name:name, fqdn:properties.configuration.ingress.fqdn}" -o table
+```
+
+The FQDN in the agent's error message must match the app you are inspecting. The container name inside a revision does not have to match the app name, so read the **app** name from `az containerapp list`, not from a log header.
 
 **A note on replica count.** Scaling to zero does not cause a 401. A cold start produces a delay, a timeout, or a 5xx — never an authentication failure. Set minimum replicas to 1 for demos so the first prompt is not slow, but do not treat it as an auth fix.
+
+**If you need to prove the rest of the chain works.** Temporarily setting DAB to accept unauthenticated calls is a legitimate way to isolate auth from everything else, but it needs two changes, not one. Switching the host to `development` mode is not sufficient: entity permissions in this repository grant `authenticated` and `Mcp.Invoke`, so an anonymous call still fails with `Authorization Failure: Access Not Allowed` from the authorization layer rather than the authentication layer. To test anonymously, add an `anonymous` role with `read` to each entity as well. Remember to revert both.
 
 ## 15. Cleanup
 

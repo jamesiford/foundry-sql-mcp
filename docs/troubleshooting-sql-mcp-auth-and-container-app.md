@@ -227,20 +227,39 @@ Interpret the result:
 
 ## 6. Troubleshoot `401 Unauthorized` from Foundry to `/mcp`
 
-An error like this means Foundry can reach the endpoint, but DAB rejected the token:
+An error like this means Foundry reached *something* that returned 401:
 
 ```text
 Authentication failed when connecting to the MCP server ...
 Response status code does not indicate success: 401 (Unauthorized)
 ```
 
-Most likely causes:
+Before working through the causes below, establish **which component** produced the 401 — DAB itself, or a layer in front of it. The two have no fixes in common, and the message looks identical either way. Call a path DAB does not protect, with no token:
 
-1. The Foundry MCP connection is not using Microsoft Entra project managed identity authentication.
-2. The Foundry connection audience is wrong.
-3. The DAB image was built with the wrong MCP app client ID or tenant ID.
-4. The Foundry project managed identity does not have the `Mcp.Invoke` app role assignment on the MCP Enterprise Application.
-5. The active agent version points to an older MCP connection.
+```powershell
+$fqdn = az containerapp show -n $app -g $rg --query "properties.configuration.ingress.fqdn" -o tsv
+curl.exe -s -o NUL -w "%{http_code}\n" "https://$fqdn/api"
+```
+
+- **`404` (or `400`/`406`)** — the request reached DAB, so the 401 on `/mcp` is a token rejection. Continue with this section.
+- **`401`** — something in front of DAB is answering. DAB never returns 401 on an unauthenticated `/api`. Check Container Apps built-in authentication, which is not used by this design and must be off:
+
+  ```powershell
+  az containerapp auth show -n $app -g $rg --query '{enabled:platform.enabled, action:globalValidation.unauthenticatedClientAction}'
+  az containerapp auth update -n $app -g $rg --enabled false   # if it is on
+  ```
+
+> **The container logs will not tell you this.** DAB logs nothing when it rejects a token — no `IDX` code, no request line, not even at `debug` log level. Verified against `data-api-builder:2.0.9`. Empty logs are what a token rejection looks like, so do not read them as evidence that traffic never arrived.
+
+Most likely causes, once you have confirmed DAB is the one returning 401:
+
+1. The MCP Entra application emits **v1** tokens because `api.requestedAccessTokenVersion` is unset. This is the Entra default and it breaks both the `aud` and `iss` claims at once. Check with `az ad app show --id <app-id> --query 'api.requestedAccessTokenVersion'` — it must return `2`. See [Required access](demo-portal-runbook.md#required-access).
+2. The Foundry MCP connection is not using Microsoft Entra project managed identity authentication.
+3. The Foundry connection audience is wrong.
+4. The DAB image was built with the wrong MCP app client ID or tenant ID — or with the committed placeholders still in place, in which case no token can ever validate.
+5. The Foundry project managed identity does not have the `Mcp.Invoke` app role assignment on the MCP Enterprise Application.
+6. The active agent version points to an older MCP connection.
+7. More than one Container App exists and the connection points at a different one than you are inspecting. Confirm with `az containerapp list -g $rg --query "[].{name:name, fqdn:properties.configuration.ingress.fqdn}" -o table` and match the FQDN against the agent's error message.
 
 ### 6.1 Confirm the MCP endpoint URL
 
